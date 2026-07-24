@@ -130,9 +130,10 @@ def downsample(image: torch.Tensor, size: List[int], mode: str, sigma: Optional[
     but first, we need to perform smoothing 
     if sigma is provided (in voxels), then use this sigma for downsampling, otherwise infer sigma
     '''
-    if use_fft and ffo is None:
-        logger.warn("fireants_fused_ops is not found, will default to standard downsampling")
-        use_fft = False
+    # The FFT downsampling path no longer requires the fused kernel: downsample_fft
+    # falls back to a numerically-identical pure-torch frequency-domain Gaussian
+    # (see _gaussian_blur_fft_torch) when fireants_fused_ops is absent, so results
+    # match the fused build. Only CPU tensors take the spatial path.
     if image.device.type == 'cpu':
         use_fft = False
 
@@ -150,6 +151,36 @@ def downsample(image: torch.Tensor, size: List[int], mode: str, sigma: Optional[
     image_down = separable_filtering(image, gaussians)
     image_down = F.interpolate(image_down, size=size, mode=mode, align_corners=True)
     return image_down
+
+def _gaussian_blur_fft_torch(im_fft, starts, multiplier):
+    ''' Pure-torch, in-place equivalent of ffo.gaussian_blur_fft{2,3} (used when the
+    fused kernel is unavailable). Applies a frequency-domain Gaussian with per-axis
+    sigma = dim/4 about the (shifted) DC centre and rescales by ``multiplier``, so
+    downsample_fft produces identical results with or without fireants_fused_ops.
+    Matches the CUDA kernel (fused_ops/src/GaussianBlurFFT.cu) to float precision. '''
+    spatial = im_fft.shape[2:]
+    factors = []
+    for axis, (n, s) in enumerate(zip(spatial, starts)):
+        freq = (s + torch.arange(n, device=im_fft.device, dtype=torch.float32)) / (n / 4.0)
+        shape = [1, 1] + [1] * len(spatial)
+        shape[2 + axis] = n
+        factors.append(freq.pow(2).view(shape))
+    gauss = torch.exp(-0.5 * sum(factors))
+    im_fft.mul_((gauss * float(multiplier)).to(im_fft.dtype))
+    return im_fft
+
+
+def _gaussian_blur_fft2(im_fft, ys, xs, ye, xe, multiplier):
+    if ffo is not None:
+        return ffo.gaussian_blur_fft2(im_fft, ys, xs, ye, xe, multiplier)
+    return _gaussian_blur_fft_torch(im_fft, (ys, xs), multiplier)
+
+
+def _gaussian_blur_fft3(im_fft, zs, ys, xs, ze, ye, xe, multiplier):
+    if ffo is not None:
+        return ffo.gaussian_blur_fft3(im_fft, zs, ys, xs, ze, ye, xe, multiplier)
+    return _gaussian_blur_fft_torch(im_fft, (zs, ys, xs), multiplier)
+
 
 def downsample_fft(image: torch.Tensor, size: List[int], padding=1) -> torch.Tensor:
     ''' downsample using fft transform instead '''
@@ -170,10 +201,10 @@ def downsample_fft(image: torch.Tensor, size: List[int], padding=1) -> torch.Ten
     # print(multiplier, [-(h//2 + padding) for h in target_dims], [h - (h//2) + padding for h in target_dims])
     if num_dims == 2:
         im_fft = im_fft[:, :, start_idx[0]:end_idx[0], start_idx[1]:end_idx[1]].contiguous()
-        ffo.gaussian_blur_fft2(im_fft, *[-(h//2 + padding) for h in target_dims], *[h - (h//2) + padding for h in target_dims], multiplier)
+        _gaussian_blur_fft2(im_fft, *[-(h//2 + padding) for h in target_dims], *[h - (h//2) + padding for h in target_dims], multiplier)
     elif num_dims == 3:
         im_fft = im_fft[:, :, start_idx[0]:end_idx[0], start_idx[1]:end_idx[1], start_idx[2]:end_idx[2]].contiguous()
-        ffo.gaussian_blur_fft3(im_fft, *[-(h//2 + padding) for h in target_dims], *[h - (h//2) + padding for h in target_dims], multiplier)
+        _gaussian_blur_fft3(im_fft, *[-(h//2 + padding) for h in target_dims], *[h - (h//2) + padding for h in target_dims], multiplier)
     else:
         raise ValueError(f"Invalid dimension: {dims}")
     
