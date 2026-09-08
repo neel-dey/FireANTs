@@ -14,6 +14,7 @@
 
 
 from fireants.registration.abstract import AbstractRegistration
+from fireants.registration.translation import translation_parameters
 from typing import List, Optional, Union
 import torch
 from torch import nn
@@ -69,9 +70,15 @@ class AffineRegistration(AbstractRegistration):
         custom_loss (nn.Module, optional): Custom loss module. Defaults to None.
         blur (bool, optional): Whether to blur images during downsampling. Defaults to True.
         around_center (bool, optional): Whether to apply affine around the center of the image. Defaults to True.
+        normalize_translation (bool): Optimize translation relative to the RMS physical
+            half-extent of the fixed FOV. Defaults to False for legacy compatibility.
+        translation_lr (float, optional): Dimensionless translation LR when normalized;
+            defaults to optimizer_lr. Linear coefficients retain optimizer_lr.
 
     Attributes:
-        affine (nn.Parameter): Learnable affine transformation matrix [N, D, D+1]
+        affine (nn.Parameter): Legacy affine parameter [N, D, D+1]. In normalized mode,
+            separate linear [N, D, D] and transl [N, D] parameters are used instead.
+            get_affine_matrix() returns physical matrices in both modes.
         row (torch.Tensor): Bottom row for homogeneous coordinates [N, 1, D+1]
         optimizer: SGD or Adam optimizer instance
     """
@@ -89,6 +96,8 @@ class AffineRegistration(AbstractRegistration):
                 init_rigid: Optional[Union[torch.Tensor, str]] = None,
                 custom_loss: nn.Module = None,
                 blur: bool = True,
+                normalize_translation: bool = False,
+                translation_lr: Optional[float] = None,
                 **kwargs
                 ) -> None:
 
@@ -120,7 +129,7 @@ class AffineRegistration(AbstractRegistration):
         else:
             affine = torch.eye(dims, dims+1).unsqueeze(0).repeat(self.opt_size, 1, 1).to(device)  # [N, D, D+1]
         
-        affine = affine.to(self.dtype)
+        affine = affine.to(device).to(self.dtype)
 
         # whether to apply affine around the center of the image
         self.around_center = around_center 
@@ -133,14 +142,25 @@ class AffineRegistration(AbstractRegistration):
             affine[:, :self.dims, -1] = transl
             affine = affine.detach().contiguous()
 
-        self.affine = nn.Parameter(affine.to(device).to(self.dtype))  # [N, D]
+        self.normalize_translation = normalize_translation
+        self.translation_scale, translation_lr = translation_parameters(
+            fixed_images, normalize_translation, translation_lr, optimizer_lr)
+        self.translation_scale = self.translation_scale.to(device=device, dtype=self.dtype)
+        if normalize_translation:
+            self.linear = nn.Parameter(affine[..., :dims].contiguous())
+            self.transl = nn.Parameter((affine[..., -1] / self.translation_scale).contiguous())
+            params = [{"params": [self.linear], "lr": optimizer_lr},
+                      {"params": [self.transl], "lr": translation_lr}]
+        else:
+            self.affine = nn.Parameter(affine.to(device).to(self.dtype))
+            params = [self.affine]
         self.row = torch.zeros((self.opt_size, 1, dims+1), device=device, dtype=self.dtype)   # keep this to append to affine matrix
         self.row[:, 0, -1] = 1.0
         # optimizer
         if optimizer == 'SGD':
-            self.optimizer = SGD([self.affine], lr=optimizer_lr, **optimizer_params)
+            self.optimizer = SGD(params, lr=optimizer_lr, **optimizer_params)
         elif optimizer == 'Adam':
-            self.optimizer = Adam([self.affine], lr=optimizer_lr, **optimizer_params)
+            self.optimizer = Adam(params, lr=optimizer_lr, **optimizer_params)
         else:
             raise ValueError(f"Optimizer {optimizer} not supported")
     
@@ -185,7 +205,11 @@ class AffineRegistration(AbstractRegistration):
                 If homogenous=True: shape [N, D+1, D+1]
                 If homogenous=False: shape [N, D, D+1]
         """
-        affine = self.affine.clone()
+        if self.normalize_translation:
+            physical_translation = self.transl * self.translation_scale
+            affine = torch.cat([self.linear, physical_translation[..., None]], dim=-1)
+        else:
+            affine = self.affine.clone()
         if self.around_center:  # we need to convert t' to t
             A = affine[:, :self.dims, :self.dims] + 0
             t = affine[:, :self.dims, -1] + 0

@@ -14,6 +14,7 @@
 
 
 from fireants.registration.abstract import AbstractRegistration
+from fireants.registration.translation import translation_parameters
 from typing import List, Optional, Union
 import torch
 from torch import nn
@@ -71,6 +72,10 @@ class RigidRegistration(AbstractRegistration):
         scaling (bool, optional): Whether to optimize scaling parameters. Default: False
         custom_loss (nn.Module, optional): Custom loss module. Default: None
         blur (bool, optional): Whether to apply Gaussian blur during downsampling. Default: True
+        normalize_translation (bool): Optimize translation relative to the RMS physical
+            half-extent of the fixed FOV. Defaults to False for legacy compatibility.
+        translation_lr (float, optional): Dimensionless translation LR when normalized;
+            defaults to optimizer_lr. Rotation/scaling retain optimizer_lr.
 
     Attributes:
         rotation (nn.Parameter): Rotation parameters (2D: angle; 3D: quaternion w,x,y,z)
@@ -94,7 +99,9 @@ class RigidRegistration(AbstractRegistration):
                 scaling: bool = False,
                 custom_loss: nn.Module = None, 
                 around_center: bool = True,
-                blur: bool = True, **kwargs
+                blur: bool = True,
+                normalize_translation: bool = False,
+                translation_lr: Optional[float] = None, **kwargs
                 ) -> None:
         super().__init__(scales=scales, iterations=iterations, fixed_images=fixed_images, moving_images=moving_images, 
                          loss_type=loss_type, mi_kernel_type=mi_kernel_type, cc_kernel_type=cc_kernel_type, custom_loss=custom_loss, 
@@ -152,11 +159,18 @@ class RigidRegistration(AbstractRegistration):
             transl = transl - self.center + (rigid @ self.center[..., None]).squeeze(-1)
             transl = transl.detach().contiguous()
 
-        self.transl = nn.Parameter(transl.to(device))  # [N, D]
-        # optimizer
+        self.translation_scale, translation_lr = translation_parameters(
+            fixed_images, normalize_translation, translation_lr, optimizer_lr)
+        self.translation_scale = self.translation_scale.to(device=device, dtype=self.dtype)
+        self.transl = nn.Parameter(transl.to(device) / self.translation_scale)  # [N, D]
+        # Separate parameter groups keep both rates dimensionless in normalized mode.
         params = [self.rotation, self.transl]
         if scaling:
             params.append(self.logscale)
+        if normalize_translation:
+            linear_params = [self.rotation] + ([self.logscale] if scaling else [])
+            params = [{"params": linear_params, "lr": optimizer_lr},
+                      {"params": [self.transl], "lr": translation_lr}]
         
         if optimizer.lower() == 'sgd':
             self.optimizer = SGD(params, lr=optimizer_lr, **optimizer_params)
@@ -253,7 +267,7 @@ class RigidRegistration(AbstractRegistration):
         # scalediag[:, np.arange(D), np.arange(D)] = scale
         matclone = rigidmat.clone()
         matclone[:, :-1, :-1] = scale * rigidmat[:, :-1, :-1]
-        transl = self.transl
+        transl = self.transl * self.translation_scale
         if self.around_center:  # convert t' to t
             transl = transl + self.center - (matclone[:, :-1, :-1] @ self.center[..., None]).squeeze(-1)
         # now we can assign the translation
