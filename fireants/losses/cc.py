@@ -259,6 +259,15 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
 
         # _kernel = look_up_option(kernel_type, kernel_dict)
         self.kernel_type = kernel_type
+        # The kernels are buffers, not plain attributes, so `.to(device)`,
+        # `.cuda()` and `.half()` on this module (or on a parent module) carry
+        # them along instead of leaving them on the host and copying them over
+        # on every forward pass. They are derived deterministically from
+        # `kernel_type` and `kernel_size`, so they are not persistent: the
+        # state dict is unchanged.
+        self.register_buffer('kernel', None, persistent=False)
+        self.register_buffer('kernel_nd', None, persistent=False)
+        self.register_buffer('kernel_vol', None, persistent=False)
         self._update_kernel(self.kernel_size)
         self.smooth_nr = float(smooth_nr)
         self.smooth_dr = float(smooth_dr)
@@ -283,10 +292,23 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
             raise ValueError(f"kernel_size must be odd, got {kernel_size}")
         self.kernel_size = kernel_size
         _kernel_fn = kernel_dict[self.kernel_type]
-        self.kernel = _kernel_fn(self.kernel_size)
-        self.kernel = self.kernel / self.kernel.sum()
-        self.kernel.requires_grad = False
-        self.kernel_nd, self.kernel_vol = self.get_kernel_vol()
+        # build on the host in the default dtype (as before) so the values are
+        # bit-identical to the previous implementation, then move the result
+        # onto whatever device/dtype the module already lives on. This is what
+        # keeps a per-scale rebuild (`kernel_size_list`) from silently dropping
+        # the kernels back onto the CPU mid-optimization.
+        kernel = _kernel_fn(self.kernel_size)
+        kernel = kernel / kernel.sum()
+        kernel.requires_grad = False
+        kernel_nd, kernel_vol = self.get_kernel_vol(kernel)
+        ref = self.kernel  # None on the very first call, from __init__
+        if ref is not None:
+            kernel = kernel.to(device=ref.device, dtype=ref.dtype)
+            kernel_nd = kernel_nd.to(device=ref.device, dtype=ref.dtype)
+            kernel_vol = kernel_vol.to(device=ref.device, dtype=ref.dtype)
+        self.kernel = kernel
+        self.kernel_nd = kernel_nd
+        self.kernel_vol = kernel_vol
 
     def set_scales(self, scales: List) -> None:
         """
@@ -329,11 +351,26 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
     def get_image_padding(self) -> int:
         return (self.kernel_size - 1) // 2
 
-    def get_kernel_vol(self):
-        vol = self.kernel
+    def get_kernel_vol(self, kernel: torch.Tensor = None):
+        kernel = self.kernel if kernel is None else kernel
+        vol = kernel
         for _ in range(self.ndim - 1):
-            vol = torch.matmul(vol.unsqueeze(-1), self.kernel.unsqueeze(0))
+            vol = torch.matmul(vol.unsqueeze(-1), kernel.unsqueeze(0))
         return vol, torch.sum(vol)
+
+    def _move_kernels_to(self, x: torch.Tensor) -> None:
+        """Move the kernels onto ``x``'s device, once, instead of per forward.
+
+        `.to()` returns the tensor itself when the device already matches, so
+        after the first call this costs a comparison. Only the device is
+        synced: the kernels keep the dtype they were built (or moved) with and
+        the cast to the input dtype stays where it always was, inside the
+        forward pass, so the arithmetic is bit-for-bit what it used to be.
+        """
+        if self.kernel.device != x.device:
+            self.kernel = self.kernel.to(x.device)
+            self.kernel_nd = self.kernel_nd.to(x.device)
+            self.kernel_vol = self.kernel_vol.to(x.device)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         '''
@@ -360,6 +397,8 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
             raise ValueError(f"expecting pred with {self.ndim} spatial dimensions, got pred of shape {pred.shape}")
         if target.shape != pred.shape:
             raise ValueError(f"ground truth has differing shape ({target.shape}) from pred ({pred.shape})")
+        # callers rarely move this module, so meet them halfway
+        self._move_kernels_to(pred)
 
         # sum over kernel
         def cc_checkpoint_fn(target, pred, kernel, kernel_vol, checkpointing=False):
