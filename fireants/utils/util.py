@@ -143,11 +143,22 @@ class catchtime:
         print(self.readout)
 
 
-def _assert_check_scales_decreasing(scales: List[int]):
-    ''' Check if the list of scales is in decreasing order '''
+def _assert_check_scales_decreasing(scales: List[int], allow_repeated_scales: bool = False):
+    ''' Check if the list of scales is in decreasing order
+
+    Args:
+        scales: the multi-resolution schedule, coarsest first.
+        allow_repeated_scales: relax the check from strictly decreasing to
+            non-increasing, so a scale may appear more than once in a row and
+            the pyramid runs several passes at that resolution. Off by default.
+    '''
     for i in range(len(scales)-1):
-        if scales[i] <= scales[i+1]:
+        if scales[i] < scales[i+1]:
             raise ValueError("Scales must be in decreasing order")
+        if scales[i] == scales[i+1] and not allow_repeated_scales:
+            raise ValueError("Scales must be in decreasing order (scale {} is repeated at "
+                             "positions {} and {}); pass allow_repeated_scales=True to run "
+                             "more than one pass at the same resolution".format(scales[i], i, i+1))
 
 
 def grad_smoothing_hook(grad: torch.Tensor, gaussians: List[torch.Tensor]):

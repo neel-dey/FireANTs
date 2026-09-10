@@ -280,6 +280,9 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
         # scale and iteration tracking
         self.scales = None
         self.iterations = None
+        # which pyramid level we are on, counted from `set_scales`. Looking the
+        # level up by position rather than by value is what lets a scale repeat.
+        self._level = -1
 
     def _update_kernel(self, kernel_size: int) -> None:
         """
@@ -319,6 +322,7 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
             scales: list of scales used in registration
         """
         self.scales = scales
+        self._level = -1
         if self.kernel_size_list:
             assert len(self.kernel_size_list) == len(self.scales), \
                 f"kernel_size_list must have the same length as scales, got {len(self.kernel_size_list)} vs {len(self.scales)}"
@@ -342,11 +346,36 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
             iters: the current iteration count
         """
         logger.info(f"setting current scale and iterations to {scale} and {iters}")
+        self._level = self._advance_level(scale)
         if self.kernel_size_list and self.scales is not None:
-            idx = self.scales.index(scale)
-            new_kernel_size = self.kernel_size_list[idx]
+            new_kernel_size = self.kernel_size_list[self._level]
             if new_kernel_size != self.kernel_size:
                 self._update_kernel(new_kernel_size)
+
+    def _advance_level(self, scale) -> int:
+        """Index of the pyramid level this call is for.
+
+        Registration walks `scales` in order and calls this once per level, so
+        counting the calls since `set_scales` gives the level directly. That
+        matters when a scale is repeated (`allow_repeated_scales`): looking the
+        level up by value would return the first occurrence every time and pin
+        every repeat to the first entry of `kernel_size_list`.
+
+        The count is only trusted when it agrees with the scale it was handed.
+        A caller that jumps straight to a level, or re-runs `optimize()`
+        without setting the scales again, falls back to the value lookup.
+        """
+        if self.scales is None:
+            return 0
+        level = self._level + 1
+        if level >= len(self.scales):
+            level = 0    # a fresh pass over the pyramid
+        if self.scales[level] == scale:
+            return level
+        try:
+            return self.scales.index(scale)
+        except ValueError:
+            return 0
 
     def get_image_padding(self) -> int:
         return (self.kernel_size - 1) // 2

@@ -76,6 +76,10 @@ class AbstractRegistration(ABC):
         tolerance (float, optional): Convergence tolerance. Default: 1e-6
         max_tolerance_iters (int, optional): Max iterations for convergence check. Default: 10
         progress_bar (bool, optional): Whether to show progress bar. Default: True
+        allow_repeated_scales (bool, optional): Allow a scale to be repeated, so that the
+            pyramid runs more than one pass at the same resolution (e.g. [4,4,2,1]). The
+            check on `scales` relaxes from strictly decreasing to non-increasing.
+            Default: False.
 
     Methods:
         optimize(): Abstract method to perform registration optimization
@@ -83,7 +87,8 @@ class AbstractRegistration(ABC):
         evaluate(): Apply learned transformation to new images
 
     Note:
-        The number of scales and iterations must match, and scales must be in descending order.
+        The number of scales and iterations must match, and scales must be in descending order
+        (strictly, unless `allow_repeated_scales` is set).
         The fixed and moving images must be broadcastable in batch dimension.
     """
 
@@ -99,13 +104,15 @@ class AbstractRegistration(ABC):
                 tolerance: float = 1e-6, max_tolerance_iters: int = 10,
                 progress_bar: bool = True,
                 dtype: torch.dtype = torch.float32,
+                allow_repeated_scales: bool = False,
                 ) -> None:
         '''
         Initialize abstract registration class
         '''
         super().__init__()
         self.scales = scales
-        _assert_check_scales_decreasing(self.scales)
+        self.allow_repeated_scales = allow_repeated_scales
+        _assert_check_scales_decreasing(self.scales, allow_repeated_scales=allow_repeated_scales)
         self.iterations = iterations
         assert len(self.iterations) == len(self.scales), "Number of iterations must match number of scales"
         # check for fixed and moving image sizes
