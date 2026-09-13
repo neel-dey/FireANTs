@@ -1,0 +1,42 @@
+[
+  {
+    "method": "rigid",
+    "lr": null,
+    "organ_dice": 0.6795801497016862,
+    "fixed_body_covered": 0.969085993310725,
+    "warped_body_voxels": 2140539,
+    "intersection_voxels": 1663126
+  },
+  {
+    "method": "adam",
+    "lr": 0.003,
+    "organ_dice": 0.7332752619862845,
+    "fixed_body_covered": 0.9515109137736135,
+    "warped_body_voxels": 1952062,
+    "intersection_voxels": 1632964
+  },
+  {
+    "method": "lbfgs",
+    "lr": 0.3,
+    "organ_dice": 0.7349741910746984,
+    "fixed_body_covered": 0.9507802211889196,
+    "warped_body_voxels": 1948233,
+    "intersection_voxels": 1631710
+  },
+  {
+    "method": "lbfgs",
+    "lr": 1.0,
+    "organ_dice": 0.735153443343156,
+    "fixed_body_covered": 0.9507341887214628,
+    "warped_body_voxels": 1947837,
+    "intersection_voxels": 1631631
+  },
+  {
+    "method": "lbfgs",
+    "lr": 3.0,
+    "organ_dice": 0.0,
+    "fixed_body_covered": 2.330757845913599e-06,
+    "warped_body_voxels": 850036,
+    "intersection_voxels": 4
+  }
+]

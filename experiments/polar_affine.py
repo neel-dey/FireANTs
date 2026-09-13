@@ -61,7 +61,7 @@ def features(image, device, kind="intensity", mask=None, masked=False):
     if masked:
         result.array *= torch.as_tensor(foreground, device=device)[None, None]
         result.array = torch.cat([result.array, torch.as_tensor(foreground, device=device)[None, None]], dim=1)
-        result.channels = 2
+        result.channels = result.array.shape[1]
     return BatchedImages([result])
 
 

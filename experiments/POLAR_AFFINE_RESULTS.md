@@ -7,6 +7,9 @@ failure. The NCC numerator smoothing was a larger source of instability in that
 case. The implementation remains opt-in; neither the default parameterization
 nor the default loss changed.
 
+The [solver comparison](AFFINE_SOLVERS_RESULTS.md) tests L-BFGS and GPU block
+matching from the same rigid initializations.
+
 The branch is `experiment/polar-affine`, based on `c72d2ef`. It adds
 `AffineRegistration(parameterization="polar")`, using an incremental rotation,
 a fixed initial orthogonal factor, and a symmetric matrix exponential. It

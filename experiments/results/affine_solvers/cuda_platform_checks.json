@@ -1,0 +1,191 @@
+[
+  {
+    "case": "synthetic_2d_0",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_2d_0/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_2d_1",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_2d_1/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_2d_2",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_2d_2/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_2d_3",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_2d_3/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_2d_4",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_2d_4/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_2d_5",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_2d_5/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_2d_6",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_2d_6/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_2d_7",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_2d_7/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_3d_0",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_3d_0/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_3d_1",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_3d_1/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_3d_2",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_3d_2/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_3d_3",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_3d_3/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_3d_4",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_3d_4/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_3d_5",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_3d_5/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_3d_6",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_3d_6/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "synthetic_3d_7",
+    "log": "tests/test_results/affine_solvers/cuda_synthetic/synthetic_3d_7/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "brain_021_masked",
+    "log": "tests/test_results/affine_solvers/cuda_brains/brain_021_masked/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "brain_127_masked",
+    "log": "tests/test_results/affine_solvers/cuda_brains/brain_127_masked/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "brain_inter_masked",
+    "log": "tests/test_results/affine_solvers/cuda_brains/brain_inter_masked/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "abdomen_0001_masked",
+    "log": "tests/test_results/affine_solvers/cuda_abdomens/abdomen_0001_masked/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "abdomen_0002_masked",
+    "log": "tests/test_results/affine_solvers/cuda_abdomens/abdomen_0002_masked/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "abdomen_0003_masked",
+    "log": "tests/test_results/affine_solvers/cuda_abdomens/abdomen_0003_masked/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "abdomen_0004_masked",
+    "log": "tests/test_results/affine_solvers/cuda_abdomens/abdomen_0004_masked/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "abdomen_0005_masked",
+    "log": "tests/test_results/affine_solvers/cuda_abdomens/abdomen_0005_masked/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "abdomen_0006_masked",
+    "log": "tests/test_results/affine_solvers/cuda_abdomens/abdomen_0006_masked/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "abdomen_0007_masked",
+    "log": "tests/test_results/affine_solvers/cuda_abdomens/abdomen_0007_masked/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  },
+  {
+    "case": "abdomen_0008_masked",
+    "log": "tests/test_results/affine_solvers/cuda_abdomens/abdomen_0008_masked/run.log",
+    "platform_lines": [
+      "[NiftyReg INFO] Platform: CUDA"
+    ]
+  }
+]

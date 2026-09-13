@@ -1,0 +1,26 @@
+{
+  "repository": "https://github.com/KCL-BMEIS/niftyreg",
+  "commit": "14cd5d58ff9969497e2dd0d6762dbc050eaa4e0f",
+  "version": "2.0.0+12.14cd5d58",
+  "cuda_toolkit": "/usr/pubsw/packages/CUDA/13.0",
+  "cuda_architecture": "120-real",
+  "cmake_options": {
+    "USE_CUDA": "ON",
+    "CHECK_GPU": "ON",
+    "BUILD_TESTING": "OFF",
+    "CMAKE_BUILD_TYPE": "Release",
+    "USE_CUDA_FMA": "OFF"
+  },
+  "source_modifications": false,
+  "block_matching_cuda_dimensions": [
+    2,
+    3
+  ],
+  "least_trimmed_squares_cuda_dimensions": [
+    3
+  ],
+  "least_trimmed_squares_cpu_dimensions": [
+    2
+  ],
+  "final_cubic_resampling": "CPU"
+}

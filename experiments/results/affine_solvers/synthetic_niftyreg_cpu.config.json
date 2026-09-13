@@ -1,0 +1,39 @@
+{
+  "suite": "synthetic",
+  "methods": [
+    "niftyreg"
+  ],
+  "rates": [
+    0.3,
+    1.0,
+    3.0
+  ],
+  "iterations": 100,
+  "block_iterations": 10,
+  "smooth_nr": 0.0,
+  "kernel": [
+    9,
+    7,
+    5
+  ],
+  "spacing": 1.0,
+  "device": "cpu",
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "cases": null,
+  "data_root": "../../reference-runs",
+  "initial": "experiments/results/polar_affine/synthetic.jsonl",
+  "output": "experiments/results/affine_solvers/synthetic_niftyreg_cpu.jsonl",
+  "work": "tests/test_results/affine_solvers/cpu_synthetic",
+  "niftyreg": "tests/test_results/affine_solvers/niftyreg_build/reg-apps/reg_aladin",
+  "niftyreg_platform": "cpu",
+  "torch_version": "2.13.0+cu130"
+}

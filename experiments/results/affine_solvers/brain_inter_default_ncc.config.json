@@ -1,0 +1,39 @@
+{
+  "suite": "brains",
+  "methods": [
+    "lbfgs"
+  ],
+  "rates": [
+    1.0
+  ],
+  "iterations": 100,
+  "block_iterations": 10,
+  "smooth_nr": 1e-05,
+  "kernel": [
+    9,
+    7,
+    5
+  ],
+  "spacing": 1.0,
+  "device": "cuda:0",
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "cases": [
+    "brain_inter"
+  ],
+  "data_root": "../../reference-runs",
+  "initial": "experiments/results/polar_affine/brains_native.jsonl",
+  "output": "experiments/results/affine_solvers/brain_inter_default_ncc.jsonl",
+  "work": "tests/test_results/affine_solvers/niftyreg",
+  "niftyreg": "/usr/pubsw/packages/niftyreg/nifty_reg-1.3.9/local/bin/reg_aladin",
+  "niftyreg_platform": "legacy",
+  "torch_version": "2.13.0+cu130"
+}

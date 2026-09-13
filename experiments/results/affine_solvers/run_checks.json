@@ -1,0 +1,74 @@
+[
+  {
+    "file": "synthetic.jsonl",
+    "rows": 96,
+    "affine_fits": 80,
+    "errors": 0
+  },
+  {
+    "file": "brains.jsonl",
+    "rows": 18,
+    "affine_fits": 15,
+    "errors": 0
+  },
+  {
+    "file": "abdomens.jsonl",
+    "rows": 48,
+    "affine_fits": 40,
+    "errors": 0
+  },
+  {
+    "file": "abdomens_default_ncc.jsonl",
+    "rows": 40,
+    "affine_fits": 32,
+    "errors": 0
+  },
+  {
+    "file": "brain_inter_default_ncc.jsonl",
+    "rows": 2,
+    "affine_fits": 1,
+    "errors": 0
+  },
+  {
+    "file": "synthetic_niftyreg_cpu.jsonl",
+    "rows": 32,
+    "affine_fits": 16,
+    "errors": 0
+  },
+  {
+    "file": "synthetic_niftyreg_cuda.jsonl",
+    "rows": 32,
+    "affine_fits": 16,
+    "errors": 0
+  },
+  {
+    "file": "brains_niftyreg_cpu.jsonl",
+    "rows": 6,
+    "affine_fits": 3,
+    "errors": 0
+  },
+  {
+    "file": "brains_niftyreg_cuda.jsonl",
+    "rows": 6,
+    "affine_fits": 3,
+    "errors": 0
+  },
+  {
+    "file": "abdomens_niftyreg_cpu.jsonl",
+    "rows": 16,
+    "affine_fits": 8,
+    "errors": 0
+  },
+  {
+    "file": "abdomens_niftyreg_cuda.jsonl",
+    "rows": 16,
+    "affine_fits": 8,
+    "errors": 0
+  },
+  {
+    "file": "abdomen_repeat_niftyreg_cuda.jsonl",
+    "rows": 2,
+    "affine_fits": 1,
+    "errors": 0
+  }
+]
