@@ -30,6 +30,7 @@ setup(
             name='fireants_fused_ops',
             sources=[
                 'src/src.cpp',
+                'src/BlockMatching.cu',
                 'src/CrossCorrelation.cu',  
                 'src/FusedGridSampler.cu',
                 'src/FusedGridSamplerGenericLabel.cu',

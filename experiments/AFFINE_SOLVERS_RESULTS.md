@@ -1,14 +1,16 @@
 # Affine solver comparison, 2026-09-13
 
-GPU block matching is the stronger candidate for real 3D affine refinement in
-this sample. It improved all three brain pairs and all eight MR–CT abdominal
-pairs from the same rigid initializations, without collapsed transforms.
-L-BFGS was accurate and fast on synthetic data and brains, but line search did
-not prevent abdominal collapse when the loss favored it.
+At step size 1 with `smooth_nr=0`, L-BFGS improved all three brain pairs and all
+eight MR–CT abdominal pairs from the same rigid initializations. The GPU block
+matching reference also improved all eleven pairs. L-BFGS was more accurate
+on synthetic data and faster on brains. Failure at the unusually large step
+size 3 is a stress-test result, not sufficient evidence to prefer block matching.
 
-Both approaches remain experiments on `experiment/polar-affine`. This change
-adds an L-BFGS experiment and runs NiftyReg's existing CUDA implementation;
-it does not add a CPU block matcher or a new solver to the FireANTs public API.
+Both approaches were evaluated on `experiment/polar-affine`. This report
+records the L-BFGS experiment and NiftyReg's existing CUDA implementation as a
+reference. The subsequent [native block-matching report](NATIVE_BLOCK_MATCHING_RESULTS.md)
+covers the independent Torch and CUDA implementation, which requires no
+NiftyReg dependency and implements the affine fit on GPU in both dimensions.
 The earlier polar parameterization remains opt-in.
 
 ## Measurements
@@ -100,9 +102,10 @@ Retaining default numerator smoothing was worse for L-BFGS:
   `0.6818` at step `1`, versus `0.7685` for Adam on that same loss.
 - Abdomen 0002 also collapsed at step `3`.
 
-This supports changing the optimization method and checking the objective
-together. It does not support unconstrained L-BFGS as a general replacement
-for the existing affine optimizer. Block matching avoids optimizing this
+The step-size-1 results support L-BFGS with an appropriate objective. The
+default-NCC failures at that same step size show that loss settings still
+matter. The step-size-3 stress failure should not be treated as a failure of
+the usual configuration. Block matching avoids optimizing this
 whole-image masked objective: it estimates local correspondences and fits
 the affine with least trimmed squares.
 
@@ -203,19 +206,19 @@ cmake -S tests/test_results/niftyreg_rerun/source -B tests/test_results/niftyreg
   -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DUSE_CUDA_FMA=OFF
 cmake --build tests/test_results/niftyreg_rerun/build --target reg_aladin -j 12
 
-python experiments/affine_solvers.py --suite synthetic \
+python experiments/affine_solvers.py --suite synthetic --methods adam lbfgs niftyreg \
   --initial experiments/results/polar_affine/synthetic.jsonl \
   --niftyreg tests/test_results/niftyreg_rerun/build/reg-apps/reg_aladin --niftyreg-platform cuda \
   --work tests/test_results/affine_solver_rerun/synthetic \
   --output tests/test_results/affine_solver_rerun/synthetic.jsonl
 
-python experiments/affine_solvers.py --suite brains --spacing 1 --kernel 9 7 5 \
+python experiments/affine_solvers.py --suite brains --spacing 1 --kernel 9 7 5 --methods adam lbfgs niftyreg \
   --initial experiments/results/polar_affine/brains_native.jsonl \
   --niftyreg tests/test_results/niftyreg_rerun/build/reg-apps/reg_aladin --niftyreg-platform cuda \
   --work tests/test_results/affine_solver_rerun/brains \
   --output tests/test_results/affine_solver_rerun/brains.jsonl
 
-python experiments/affine_solvers.py --suite abdomens --spacing 2 --kernel 13 9 7 \
+python experiments/affine_solvers.py --suite abdomens --spacing 2 --kernel 13 9 7 --methods adam lbfgs niftyreg \
   --initial experiments/results/polar_affine/abdomens_native.jsonl \
   --niftyreg tests/test_results/niftyreg_rerun/build/reg-apps/reg_aladin --niftyreg-platform cuda \
   --work tests/test_results/affine_solver_rerun/abdomens \

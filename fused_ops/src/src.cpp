@@ -23,8 +23,12 @@
 #include "GaussianBlurFFT.h"
 #include "MutualInformation.h"
 #include "common.h"
+#include "BlockMatching.h"
 
 PYBIND11_MODULE(fireants_fused_ops, m) {
+    m.def("block_matching_variance", &block_matching_variance, "Masked block variance");
+    m.def("block_matching_ncc", &block_matching_ncc, "Local block NCC correspondences");
+    m.def("block_matching_lsq", &block_matching_lsq, "Affine least-squares solve for normalized points");
     // Reduction enum
     // usable as integers
     py::enum_<Reduction>(m, "Reduction", py::arithmetic())

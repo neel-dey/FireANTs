@@ -212,7 +212,7 @@ def run(case, args, previous, handle):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", choices=["synthetic", "brains", "abdomens"], required=True)
-    parser.add_argument("--methods", nargs="+", choices=["adam", "lbfgs", "niftyreg"], default=["adam", "lbfgs", "niftyreg"])
+    parser.add_argument("--methods", nargs="+", choices=["adam", "lbfgs", "niftyreg"], default=["adam", "lbfgs"])
     parser.add_argument("--rates", type=float, nargs="+", default=[.3, 1., 3.])
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--block-iterations", type=int, default=10)

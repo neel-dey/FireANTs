@@ -1,0 +1,27 @@
+{
+  "suite": "synthetic",
+  "backends": [
+    "cuda"
+  ],
+  "initial": "experiments/results/polar_affine/synthetic.jsonl",
+  "output": "experiments/results/native_block_matching/synthetic_cuda.jsonl",
+  "data_root": "../../reference-runs",
+  "device": "cuda:0",
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "cases": null,
+  "iterations": [
+    20,
+    10,
+    10
+  ],
+  "torch_version": "2.13.0+cu130"
+}

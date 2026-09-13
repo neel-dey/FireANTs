@@ -1,0 +1,168 @@
+{
+  "cases": 27,
+  "exact_exported_matrices": 27,
+  "comparisons": [
+    {
+      "suite": "synthetic",
+      "name": "synthetic_2d_0",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_2d_1",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_2d_2",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_2d_3",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_2d_4",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_2d_5",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_2d_6",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_2d_7",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_3d_0",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_3d_1",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_3d_2",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_3d_3",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_3d_4",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_3d_5",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_3d_6",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "synthetic",
+      "name": "synthetic_3d_7",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "brains",
+      "name": "brain_inter_masked",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "brains",
+      "name": "brain_021_masked",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "brains",
+      "name": "brain_127_masked",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "abdomens",
+      "name": "abdomen_0001_masked",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "abdomens",
+      "name": "abdomen_0002_masked",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "abdomens",
+      "name": "abdomen_0003_masked",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "abdomens",
+      "name": "abdomen_0004_masked",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "abdomens",
+      "name": "abdomen_0005_masked",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "abdomens",
+      "name": "abdomen_0006_masked",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "abdomens",
+      "name": "abdomen_0007_masked",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    },
+    {
+      "suite": "abdomens",
+      "name": "abdomen_0008_masked",
+      "max_absolute_matrix_difference": 0.0,
+      "exact_exported_matrix": true
+    }
+  ]
+}

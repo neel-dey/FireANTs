@@ -1,4 +1,3 @@
-# Copyright (c) 2026 Rohit Jena. All rights reserved.
 # Distributed under the FireANTs License version 1.0; see LICENSE.
 
 """Rotation and symmetric log-stretch parameters for an affine linear part."""
