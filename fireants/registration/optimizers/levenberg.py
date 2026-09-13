@@ -162,6 +162,11 @@ class WarpLevenbergMarquardt:
     def cleanup(self):
         # manually clean up
         del self.grid
+
+    def reset_state(self):
+        """Reset loss history and step count after restoring a warp."""
+        self.last_loss = None
+        self.step_t = 0
     
     def set_data_and_size(self, warp, size, grid_copy=None):
         ''' change the optimization variables sizes '''

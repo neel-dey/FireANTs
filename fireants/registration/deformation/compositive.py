@@ -113,6 +113,14 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
     def step(self, loss: Optional[torch.Tensor] = None):
         self.optimizer.step(loss)
 
+    def optimized_parameters(self):
+        """Return the current displacement parameter; set_size replaces it."""
+        return [self.warp]
+
+    def reset_optimizer_state(self):
+        """Reset optimizer state after restoring the displacement field."""
+        self.optimizer.reset_state()
+
     def get_warp(self):
         ''' return warp function '''
         warp = self.warp

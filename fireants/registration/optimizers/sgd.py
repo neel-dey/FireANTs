@@ -94,6 +94,11 @@ class WarpSGD:
         del self.velocity
         del self.grid
 
+    def reset_state(self):
+        """Reset momentum after restoring a warp."""
+        if self.velocity is not None:
+            self.velocity.zero_()
+
     def set_data_and_size(self, warp, size, grid_copy=None):
         ''' change the optimization variables sizes '''
         self.warp = warp

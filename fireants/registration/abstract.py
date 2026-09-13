@@ -22,7 +22,7 @@ from fireants.losses import GlobalMutualInformationLoss, LocalNormalizedCrossCor
 from torch.optim import SGD, Adam
 from fireants.io.image import BatchedImages, FakeBatchedImages
 from typing import Optional, Union
-from fireants.utils.util import ConvergenceMonitor
+from fireants.utils.util import BestIterate, ConvergenceMonitor
 from torch.nn import functional as F
 from functools import partial
 from fireants.utils.imageutils import is_torch_float_type, downsample 
@@ -80,6 +80,10 @@ class AbstractRegistration(ABC):
             pyramid runs more than one pass at the same resolution (e.g. [4,4,2,1]). The
             check on `scales` relaxes from strictly decreasing to non-increasing.
             Default: False.
+        keep_best (bool, optional): In rigid, affine, and greedy registration, restore
+            the parameters with the lowest finite loss measured at each level and reset
+            their optimizer state. The final optimizer step is not evaluated and is
+            discarded. Uses one extra copy of the optimized parameters. Default: False.
 
     Methods:
         optimize(): Abstract method to perform registration optimization
@@ -105,6 +109,7 @@ class AbstractRegistration(ABC):
                 progress_bar: bool = True,
                 dtype: torch.dtype = torch.float32,
                 allow_repeated_scales: bool = False,
+                keep_best: bool = False,
                 ) -> None:
         '''
         Initialize abstract registration class
@@ -128,6 +133,7 @@ class AbstractRegistration(ABC):
         self.tolerance = tolerance
         self.max_tolerance_iters = max_tolerance_iters
         self.convergence_monitor = ConvergenceMonitor(self.max_tolerance_iters, self.tolerance)
+        self.keep_best = keep_best
 
         self.device = fixed_images.device
         self.dtype = dtype
@@ -200,6 +206,16 @@ class AbstractRegistration(ABC):
 
     def print_init_msg(self):
         logger.info(f"Registration of type {self.__class__.__name__} initialized with dtype {self.dtype}")
+
+    def best_iterate(self, parameters) -> Optional[BestIterate]:
+        """Create a parameter tracker for one level when `keep_best` is enabled."""
+        return BestIterate(parameters) if self.keep_best else None
+
+    def forget_optimizer_state(self, parameters):
+        """Clear optimizer state after restoring saved parameters."""
+        for parameter in parameters:
+            if parameter is not None:
+                self.optimizer.state.pop(parameter, None)
 
     def _split_image_and_mask_last_channel(self, arrays: torch.Tensor):
         """Split arrays into (image_channels, mask_channel) if in masked mode.

@@ -191,6 +191,12 @@ class AffineRegistration(AbstractRegistration):
                 savetxt(filenames[i], A, t)
             logger.info(f"Saved transform to {filenames[i]}")
 
+    def optimized_parameters(self):
+        """Return the linear and translation parameters, or the combined affine."""
+        if self.normalize_translation:
+            return [self.linear, self.transl]
+        return [self.affine]
+
     def get_affine_matrix(self, homogenous=True):
         """Get the current affine transformation matrix.
 
@@ -311,6 +317,7 @@ class AffineRegistration(AbstractRegistration):
             # this is in physical space
             pbar = tqdm(range(iters)) if verbose else range(iters)
             torch.cuda.empty_cache()
+            best = self.best_iterate(self.optimized_parameters())
             for i in pbar:
                 self.optimizer.zero_grad()
                 affinemat = ((moving_p2t @ self.get_affine_matrix() @ fixed_t2p)[:, :-1]).contiguous().to(self.dtype)
@@ -320,14 +327,19 @@ class AffineRegistration(AbstractRegistration):
                 # calculate loss function
                 loss = self.loss_fn(moved_image, fixed_image_down)
                 loss.backward()
+                # Save parameters before the optimizer changes them.
+                cur_loss = loss.item()
+                if best is not None:
+                    best.measured(cur_loss)
                 self.optimizer.step()
                 # check for convergence
-                cur_loss = loss.item()
                 if self.convergence_monitor.converged(cur_loss):
                     break
                 prev_loss = cur_loss
                 if verbose:
                     pbar.set_description("scale: {}, iter: {}/{}, loss: {:4f}".format(scale, i, iters, prev_loss))
+            if best is not None and best.restore():
+                self.forget_optimizer_state(self.optimized_parameters())
 
 
 if __name__ == '__main__':

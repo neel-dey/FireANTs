@@ -247,6 +247,13 @@ class RigidRegistration(AbstractRegistration):
                 savetxt(filenames[i], A, t)
             logger.info(f"Saved transform to {filenames[i]}")
     
+    def optimized_parameters(self):
+        """Return rotation, translation, and optional scale parameters."""
+        parameters = [self.rotation, self.transl]
+        if self.scaling:
+            parameters.append(self.logscale)
+        return parameters
+
     def get_rigid_matrix(self, homogenous=True):
         """Compute the complete rigid transformation matrix.
 
@@ -369,6 +376,7 @@ class RigidRegistration(AbstractRegistration):
             # print(fixed_image_down.min(), fixed_image_down.max())
             # this is in physical space
             pbar = tqdm(range(iters)) if self.progress_bar else range(iters)
+            best = self.best_iterate(self.optimized_parameters())
             for i in pbar:
                 self.optimizer.zero_grad()
                 rigid_matrix = self.get_rigid_matrix()
@@ -378,14 +386,19 @@ class RigidRegistration(AbstractRegistration):
                                 out_shape=fixed_image_down.shape, mode='bilinear', align_corners=True)  # [N, C, H, W, [D]]
                 loss = self.loss_fn(moved_image, fixed_image_down) 
                 loss.backward()
+                # Save parameters before the optimizer changes them.
+                cur_loss = loss.item()
+                if best is not None:
+                    best.measured(cur_loss)
                 self.optimizer.step()
                 # check for convergence
-                cur_loss = loss.item()
                 if self.convergence_monitor.converged(cur_loss):
                     break
                 prev_loss = cur_loss
                 if self.progress_bar:
                     pbar.set_description("scale: {}, iter: {}/{}, loss: {:4f}".format(scale, i, iters, prev_loss))
+            if best is not None and best.restore():
+                self.forget_optimizer_state(self.optimized_parameters())
 
 
 if __name__ == '__main__':

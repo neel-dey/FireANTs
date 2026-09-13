@@ -321,6 +321,8 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
             # Get coordinates to transform
             # fixed_image_affinecoords = F.affine_grid(affine_map_init, fixed_image_down.shape, align_corners=True)
             pbar = tqdm(range(iters)) if self.progress_bar else range(iters)
+            # Track the field created by set_size for this level.
+            best = self.best_iterate(self.warp.optimized_parameters())
             # reduce
             if self.reduction == 'mean':
                 scale_factor = 1
@@ -346,11 +348,16 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                 loss.backward()
                 if self.progress_bar:
                     pbar.set_description("scale: {}, iter: {}/{}, loss: {:4f}".format(scale, i, iters, loss.item()/scale_factor))
+                if best is not None:
+                    # Save the field before the optimizer changes it.
+                    best.measured(loss.item())
                 # optimize the velocity field
                 self.warp.step(loss)
                 # check for convergence
                 if self.convergence_monitor.converged(loss.item()):
                     break
+            if best is not None and best.restore():
+                self.warp.reset_optimizer_state()
 
 
 if __name__ == '__main__':

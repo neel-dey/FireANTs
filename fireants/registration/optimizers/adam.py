@@ -187,6 +187,12 @@ class WarpAdam:
         del self.exp_avg
         del self.exp_avg_sq
         del self.grid
+
+    def reset_state(self):
+        """Reset moments and bias correction after restoring a warp."""
+        self.exp_avg.zero_()
+        self.exp_avg_sq.zero_()
+        self.step_t = 0
     
     def set_data_and_size(self, warp, size, grid_copy=None):
         ''' change the optimization variables sizes '''

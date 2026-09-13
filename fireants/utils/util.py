@@ -15,6 +15,7 @@
 
 from typing import List, Tuple
 from time import perf_counter
+from math import isfinite
 from contextlib import contextmanager
 import torch
 from torch.nn import functional as F
@@ -126,6 +127,44 @@ class ConvergenceMonitor:
     
     def reset(self):
         self.losses.clear()
+
+
+class BestIterate:
+    """Store parameters with the lowest finite loss measured during one level.
+
+    Uses one extra copy of the optimized parameters, updated when loss improves.
+    """
+
+    def __init__(self, parameters):
+        """
+        Args:
+            parameters: Optimized tensors, restored in place by `restore`.
+        """
+        self.parameters = [p for p in parameters if p is not None]
+        self.best = None
+        self.best_loss = None
+
+    def measured(self, loss: float):
+        """Record the current parameters before the optimizer step."""
+        if not isfinite(loss):
+            return
+        if self.best_loss is not None and not (loss < self.best_loss):
+            return
+        self.best_loss = loss
+        if self.best is None:
+            self.best = [p.detach().clone() for p in self.parameters]
+        else:
+            for buffer, parameter in zip(self.best, self.parameters):
+                buffer.copy_(parameter.detach())
+
+    def restore(self) -> bool:
+        """Restore the best measured parameters; return False if none were saved."""
+        if self.best is None:
+            return False
+        with torch.no_grad():
+            for buffer, parameter in zip(self.best, self.parameters):
+                parameter.copy_(buffer)
+        return True
 
 
 class catchtime:

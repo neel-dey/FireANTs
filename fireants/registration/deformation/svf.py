@@ -87,8 +87,16 @@ class StationaryVelocity(nn.Module, AbstractDeformation):
     def set_zero_grad(self):
         self.optimizer.zero_grad()
     
-    def step(self):
+    def step(self, loss=None):
         self.optimizer.step()
+
+    def optimized_parameters(self):
+        """Return the current velocity parameter; set_size replaces it."""
+        return [self.velocity_field]
+
+    def reset_optimizer_state(self):
+        """Clear optimizer state after restoring the velocity field."""
+        self.optimizer.state.pop(self.velocity_field, None)
 
     def get_warp(self):
         ''' integrate the velocity field to get the warp '''
