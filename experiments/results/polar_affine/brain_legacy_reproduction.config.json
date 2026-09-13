@@ -1,0 +1,36 @@
+{
+  "suite": "brains",
+  "device": "cuda:0",
+  "data_root": "../../reference-runs",
+  "output": "tests/test_results/polar_affine/brain_legacy_reproduction.jsonl",
+  "rates": [
+    0.01
+  ],
+  "iterations": [
+    100,
+    100,
+    100
+  ],
+  "bounds": "none",
+  "seeds": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "cases": [
+    "brain_inter"
+  ],
+  "spacing": 1.0,
+  "kernel": [
+    9,
+    7,
+    5
+  ],
+  "masked": true,
+  "initialization": "cof",
+  "legacy": true,
+  "smooth_nr": null,
+  "torch_version": "2.13.0+cu130",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition"
+}

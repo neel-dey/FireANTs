@@ -1,0 +1,34 @@
+{
+  "suite": "abdomens",
+  "device": "cuda:0",
+  "data_root": "../../reference-runs",
+  "output": "tests/test_results/polar_affine/abdomens_native.jsonl",
+  "rates": [
+    0.003
+  ],
+  "iterations": [
+    100,
+    100,
+    100
+  ],
+  "bounds": "bounded",
+  "seeds": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "cases": null,
+  "spacing": 2.0,
+  "kernel": [
+    13,
+    9,
+    7
+  ],
+  "masked": true,
+  "initialization": "rigid",
+  "legacy": false,
+  "smooth_nr": null,
+  "torch_version": "2.13.0+cu130",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition"
+}

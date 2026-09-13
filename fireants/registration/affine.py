@@ -15,6 +15,7 @@
 
 from fireants.registration.abstract import AbstractRegistration
 from fireants.registration.translation import translation_parameters
+from fireants.registration.polar import PolarLinear
 from typing import List, Optional, Tuple, Union
 import torch
 from torch import nn
@@ -73,17 +74,21 @@ class AffineRegistration(AbstractRegistration):
         normalize_translation (bool): Optimize translation relative to the RMS physical
             half-extent of the fixed FOV. Defaults to False for legacy compatibility.
         translation_lr (float, optional): Dimensionless translation LR when normalized;
-            defaults to optimizer_lr. Linear coefficients retain optimizer_lr.
+            defaults to optimizer_lr. Linear parameters retain optimizer_lr.
         scale_bounds (tuple of two floats, optional): Positive (min, max) bounds on
             each singular value of the linear part. Applied at initialization and
             after each optimizer step, including when `keep_best` is enabled.
             Bounds directional scaling and limits the condition number to max/min.
             Default: None, which disables projection.
+        parameterization (str, optional): 'matrix' optimizes linear coefficients
+            directly. 'polar' optimizes rotation and symmetric log-stretch, retaining
+            the determinant sign of a nonsingular initialization. Default: 'matrix'.
 
     Attributes:
-        affine (nn.Parameter): Legacy affine parameter [N, D, D+1]. In normalized mode,
-            separate linear [N, D, D] and transl [N, D] parameters are used instead.
-            get_affine_matrix() returns physical matrices in both modes.
+        affine (nn.Parameter): Combined parameter [N, D, D+1] in unnormalized
+            matrix mode. Normalized matrix mode uses linear and transl parameters.
+            Polar mode uses polar and transl. Use get_affine_matrix() to obtain
+            the physical matrix for any parameterization.
         row (torch.Tensor): Bottom row for homogeneous coordinates [N, 1, D+1]
         optimizer: SGD or Adam optimizer instance
     """
@@ -104,6 +109,7 @@ class AffineRegistration(AbstractRegistration):
                 normalize_translation: bool = False,
                 translation_lr: Optional[float] = None,
                 scale_bounds: Optional[Tuple[float, float]] = None,
+                parameterization: str = "matrix",
                 **kwargs
                 ) -> None:
 
@@ -113,6 +119,9 @@ class AffineRegistration(AbstractRegistration):
         device = self.device
         dims = self.dims
         self.blur = blur
+        if parameterization not in ("matrix", "polar"):
+            raise ValueError(f"Unknown affine parameterization: {parameterization}")
+        self.parameterization = parameterization
         if scale_bounds is not None:
             low, high = scale_bounds
             if not 0 < low <= high:
@@ -140,7 +149,7 @@ class AffineRegistration(AbstractRegistration):
         else:
             affine = torch.eye(dims, dims+1).unsqueeze(0).repeat(self.opt_size, 1, 1).to(device)  # [N, D, D+1]
         
-        affine = affine.to(device).to(self.dtype)
+        affine = affine.to(device).to(self.dtype).detach().clone()
 
         # whether to apply affine around the center of the image
         self.around_center = around_center 
@@ -157,7 +166,12 @@ class AffineRegistration(AbstractRegistration):
         self.translation_scale, translation_lr = translation_parameters(
             fixed_images, normalize_translation, translation_lr, optimizer_lr)
         self.translation_scale = self.translation_scale.to(device=device, dtype=self.dtype)
-        if normalize_translation:
+        if parameterization == "polar":
+            self.polar = PolarLinear(affine[..., :dims], scale_bounds)
+            self.transl = nn.Parameter((affine[..., -1] / self.translation_scale).contiguous())
+            params = [{"params": list(self.polar.parameters()), "lr": optimizer_lr},
+                      {"params": [self.transl], "lr": translation_lr}]
+        elif normalize_translation:
             self.linear = nn.Parameter(affine[..., :dims].contiguous())
             self.transl = nn.Parameter((affine[..., -1] / self.translation_scale).contiguous())
             params = [{"params": [self.linear], "lr": optimizer_lr},
@@ -205,6 +219,8 @@ class AffineRegistration(AbstractRegistration):
 
     def optimized_parameters(self):
         """Return the linear and translation parameters, or the combined affine."""
+        if self.parameterization == "polar":
+            return list(self.polar.parameters()) + [self.transl]
         if self.normalize_translation:
             return [self.linear, self.transl]
         return [self.affine]
@@ -216,6 +232,9 @@ class AffineRegistration(AbstractRegistration):
         With `around_center`, this preserves the transformed image center.
         """
         if self.scale_bounds is None:
+            return
+        if self.parameterization == "polar":
+            self.polar.project_scale(self.scale_bounds)
             return
         low, high = self.scale_bounds
         with torch.no_grad():
@@ -247,7 +266,10 @@ class AffineRegistration(AbstractRegistration):
                 If homogenous=True: shape [N, D+1, D+1]
                 If homogenous=False: shape [N, D, D+1]
         """
-        if self.normalize_translation:
+        if self.parameterization == "polar":
+            physical_translation = self.transl * self.translation_scale
+            affine = torch.cat([self.polar(), physical_translation[..., None]], dim=-1)
+        elif self.normalize_translation:
             physical_translation = self.transl * self.translation_scale
             affine = torch.cat([self.linear, physical_translation[..., None]], dim=-1)
         else:

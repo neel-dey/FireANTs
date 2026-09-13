@@ -1,0 +1,37 @@
+{
+  "suite": "synthetic",
+  "device": "cuda:0",
+  "data_root": null,
+  "output": "tests/test_results/polar_affine/synthetic.jsonl",
+  "rates": [
+    0.001,
+    0.003,
+    0.01,
+    0.03,
+    0.1
+  ],
+  "iterations": [
+    100,
+    100,
+    100
+  ],
+  "bounds": "both",
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "cases": null,
+  "spacing": 2.0,
+  "kernel": [
+    7
+  ],
+  "masked": false,
+  "torch_version": "2.13.0+cu130",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition"
+}
