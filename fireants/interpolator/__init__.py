@@ -54,10 +54,9 @@ class GridSampleDispatcher:
     
     def __init__(self):
         self._use_ffo = (USE_FFO and FFO_AVAILABLE)
-        print(f"USE_FFO: {USE_FFO}")
-        print(f"FFO_AVAILABLE: {FFO_AVAILABLE}")
+        logger.info(f"USE_FFO: {USE_FFO}")
+        logger.info(f"FFO_AVAILABLE: {FFO_AVAILABLE}")
         logger.info(f"Using FFO: {self._use_ffo}")
-        print(f"Using FFO: {self._use_ffo}")
         self._registry: Dict[bool, Dict[str, Callable]] = {
             True: {},  # FFO backend
             False: {}  # PyTorch backend
@@ -90,7 +89,7 @@ class GridSampleDispatcher:
     @use_ffo.setter
     def use_ffo(self, value: bool) -> None:
         """Set the backend state. Raises ValueError if trying to use FFO when not available."""
-        print(f"Setting use_ffo to {value}")
+        logger.info(f"Setting use_ffo to {value}")
         if value and not FFO_AVAILABLE:
             raise ValueError("Cannot set use_ffo to True when fused operations are not available")
         self._use_ffo = value
