@@ -15,7 +15,7 @@
 
 from fireants.registration.abstract import AbstractRegistration
 from fireants.registration.translation import translation_parameters
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 import torch
 from torch import nn
 from fireants.io.image import BatchedImages, FakeBatchedImages
@@ -74,6 +74,11 @@ class AffineRegistration(AbstractRegistration):
             half-extent of the fixed FOV. Defaults to False for legacy compatibility.
         translation_lr (float, optional): Dimensionless translation LR when normalized;
             defaults to optimizer_lr. Linear coefficients retain optimizer_lr.
+        scale_bounds (tuple of two floats, optional): Positive (min, max) bounds on
+            each singular value of the linear part. Applied at initialization and
+            after each optimizer step, including when `keep_best` is enabled.
+            Bounds directional scaling and limits the condition number to max/min.
+            Default: None, which disables projection.
 
     Attributes:
         affine (nn.Parameter): Legacy affine parameter [N, D, D+1]. In normalized mode,
@@ -98,6 +103,7 @@ class AffineRegistration(AbstractRegistration):
                 blur: bool = True,
                 normalize_translation: bool = False,
                 translation_lr: Optional[float] = None,
+                scale_bounds: Optional[Tuple[float, float]] = None,
                 **kwargs
                 ) -> None:
 
@@ -107,6 +113,11 @@ class AffineRegistration(AbstractRegistration):
         device = self.device
         dims = self.dims
         self.blur = blur
+        if scale_bounds is not None:
+            low, high = scale_bounds
+            if not 0 < low <= high:
+                raise ValueError(f"scale_bounds must satisfy 0 < min <= max, got {scale_bounds}")
+        self.scale_bounds = scale_bounds
         # first three params are so(n) variables, last three are translation
         if init_rigid is not None:
             if isinstance(init_rigid, str):
@@ -163,6 +174,7 @@ class AffineRegistration(AbstractRegistration):
             self.optimizer = Adam(params, lr=optimizer_lr, **optimizer_params)
         else:
             raise ValueError(f"Optimizer {optimizer} not supported")
+        self.project_scale()
     
     def get_inverse_warp_parameters(self, fixed_images: Union[BatchedImages, FakeBatchedImages], moving_images: Union[BatchedImages, FakeBatchedImages], shape=None):
         raise NotImplementedError("Inverse warped coordinates not implemented for affine registration")
@@ -196,6 +208,30 @@ class AffineRegistration(AbstractRegistration):
         if self.normalize_translation:
             return [self.linear, self.transl]
         return [self.affine]
+
+    def project_scale(self):
+        """Clamp singular values while preserving singular vectors.
+
+        Leave matrices within bounds and the optimized translation unchanged.
+        With `around_center`, this preserves the transformed image center.
+        """
+        if self.scale_bounds is None:
+            return
+        low, high = self.scale_bounds
+        with torch.no_grad():
+            if self.normalize_translation:
+                linear = self.linear
+            else:
+                linear = self.affine[:, :self.dims, :self.dims]
+            # SVD requires float32 or float64 inputs.
+            svd_input = linear.float() if linear.dtype in (torch.float16, torch.bfloat16) else linear
+            u, scales, vh = torch.linalg.svd(svd_input)
+            clamped = scales.clamp(min=low, max=high)
+            if torch.equal(clamped, scales):
+                return
+            projected = u @ torch.diag_embed(clamped) @ vh
+            changed = (clamped != scales).any(dim=-1)
+            linear.copy_(torch.where(changed[:, None, None], projected.to(linear.dtype), linear))
 
     def get_affine_matrix(self, homogenous=True):
         """Get the current affine transformation matrix.
@@ -332,6 +368,7 @@ class AffineRegistration(AbstractRegistration):
                 if best is not None:
                     best.measured(cur_loss)
                 self.optimizer.step()
+                self.project_scale()
                 # check for convergence
                 if self.convergence_monitor.converged(cur_loss):
                     break
