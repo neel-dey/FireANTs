@@ -110,7 +110,7 @@ class AffineRegistration(AbstractRegistration):
         super().__init__(scales=scales, iterations=iterations, fixed_images=fixed_images, moving_images=moving_images, 
                          loss_type=loss_type, mi_kernel_type=mi_kernel_type, cc_kernel_type=cc_kernel_type, custom_loss=custom_loss, loss_params=loss_params,
                          cc_kernel_size=cc_kernel_size, tolerance=tolerance, max_tolerance_iters=max_tolerance_iters, **kwargs)
-        device = self.device
+        device = self.compute_device
         dims = self.dims
         self.blur = blur
         if scale_bounds is not None:
@@ -308,6 +308,9 @@ class AffineRegistration(AbstractRegistration):
         fixed_t2p = self.fixed_images.get_torch2phy().to(self.dtype)
         moving_p2t = self.moving_images.get_phy2torch().to(self.dtype)
         fixed_size = fixed_arrays.shape[2:]
+        # the arrays may live in host memory; the transform and the loss are on this device
+        device = self.compute_device
+        chunk = self._linear_chunk(fixed_arrays, moving_arrays)
         # save initial affine transform to initialize grid 
 
         for scale, iters in zip(self.scales, self.iterations):
@@ -323,29 +326,18 @@ class AffineRegistration(AbstractRegistration):
             if self.blur and scale > 1:
                 sigmas = 0.5 * torch.tensor(
                     [sz / szdown for sz, szdown in zip(fixed_size, size_down)],
-                    device=fixed_arrays.device,
+                    device=device,
                     dtype=moving_arrays.dtype,
                 )
                 gaussians = [gaussian_1d(s, truncated=2) for s in sigmas]
-                fixed_image_down = self._downsample_image_and_mask(
-                    fixed_arrays,
-                    size=size_down,
-                    mode=self.fixed_images.interpolate_mode,
-                    gaussians=gaussians,
-                    align_corners=True,
-                )
-                moving_image_blur = self._downsample_image_and_mask(
-                    moving_arrays,
-                    size=mov_size_down,
-                    mode=self.moving_images.interpolate_mode,
-                    gaussians=gaussians,
-                    align_corners=True,
-                )
+                fixed_image_down = self._level_arrays(
+                    fixed_arrays, size_down, self.fixed_images.interpolate_mode, gaussians)
+                moving_image_blur = self._level_arrays(
+                    moving_arrays, mov_size_down, self.moving_images.interpolate_mode, gaussians)
             else:
                 if scale > 1:
-                    fixed_image_down = F.interpolate(
-                        fixed_arrays, size=size_down, mode=self.fixed_images.interpolate_mode, align_corners=True
-                    )
+                    fixed_image_down = self._level_arrays(
+                        fixed_arrays, size_down, self.fixed_images.interpolate_mode)
                 else:
                     fixed_image_down = fixed_arrays
                 moving_image_blur = moving_arrays
@@ -357,14 +349,21 @@ class AffineRegistration(AbstractRegistration):
             for i in pbar:
                 self.optimizer.zero_grad()
                 affinemat = ((moving_p2t @ self.get_affine_matrix() @ fixed_t2p)[:, :-1]).contiguous().to(self.dtype)
-                # sample from these coords
-                moved_image = fireants_interpolator(moving_image_blur, affine=affinemat, 
-                                out_shape=fixed_image_down.shape, mode='bilinear', align_corners=True)  # [N, C, H, W, [D]]
-                # calculate loss function
-                loss = self.loss_fn(moved_image, fixed_image_down)
-                loss.backward()
+                if chunk is None:
+                    # sample from these coords
+                    moved_image = fireants_interpolator(moving_image_blur, affine=affinemat, 
+                                    out_shape=fixed_image_down.shape, mode='bilinear', align_corners=True)  # [N, C, H, W, [D]]
+                    # calculate loss function
+                    loss = self.loss_fn(moved_image, fixed_image_down)
+                    loss.backward()
+                    cur_loss = loss.item()
+                else:
+                    def resample(image, matrix):
+                        shape = [image.shape[0], image.shape[1], *fixed_image_down.shape[2:]]
+                        return fireants_interpolator(image, affine=matrix, out_shape=shape, mode='bilinear', align_corners=True)
+                    cur_loss = self._loss_backward_in_chunks(
+                        resample, affinemat, moving_image_blur, fixed_image_down, chunk)
                 # Save parameters before the optimizer changes them.
-                cur_loss = loss.item()
                 if best is not None:
                     best.measured(cur_loss)
                 self.optimizer.step()

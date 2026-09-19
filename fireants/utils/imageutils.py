@@ -19,7 +19,7 @@ from torch import nn
 from tqdm import tqdm
 import torch.nn.functional as F
 from fireants.utils.util import catchtime
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from fireants.losses.cc import gaussian_1d, separable_filtering
 from fireants.types import ItemOrList
 import warnings
@@ -124,11 +124,14 @@ def lie_bracket_3d(u: torch.Tensor, v: torch.Tensor):
     return lie_bracket
 
 def downsample(image: torch.Tensor, size: List[int], mode: str, sigma: Optional[torch.Tensor]=None,
-               gaussians: Optional[torch.Tensor] = None, use_fft=True) -> torch.Tensor:
+               gaussians: Optional[torch.Tensor] = None, use_fft=True,
+               clamp_range: Optional[Tuple[float, float]] = None) -> torch.Tensor:
     ''' 
     this function is to downsample the image to the given size
     but first, we need to perform smoothing 
     if sigma is provided (in voxels), then use this sigma for downsampling, otherwise infer sigma
+    `clamp_range` (FFT path) replaces the image's own (min, max) as the output clamp, so that a
+    subset of channels can be downsampled exactly as it would be within the full image
     '''
     # The FFT downsampling path no longer requires the fused kernel: downsample_fft
     # falls back to a numerically-identical pure-torch frequency-domain Gaussian
@@ -138,7 +141,7 @@ def downsample(image: torch.Tensor, size: List[int], mode: str, sigma: Optional[
         use_fft = False
 
     if use_fft:
-        return downsample_fft(image.to(torch.float32), size).to(image.dtype)
+        return downsample_fft(image.to(torch.float32), size, clamp_range=clamp_range).to(image.dtype)
 
     if gaussians is None:
         if sigma is None:
@@ -182,7 +185,8 @@ def _gaussian_blur_fft3(im_fft, zs, ys, xs, ze, ye, xe, multiplier):
     return _gaussian_blur_fft_torch(im_fft, (zs, ys, xs), multiplier)
 
 
-def downsample_fft(image: torch.Tensor, size: List[int], padding=1) -> torch.Tensor:
+def downsample_fft(image: torch.Tensor, size: List[int], padding=1,
+                   clamp_range: Optional[Tuple[float, float]] = None) -> torch.Tensor:
     ''' downsample using fft transform instead '''
     dims = num_dims = len(image.shape) - 2
     dims = [-x for x in range(1, dims+1)]
@@ -219,7 +223,9 @@ def downsample_fft(image: torch.Tensor, size: List[int], padding=1) -> torch.Ten
     # print("after padding", im_fft.shape)
     im_fft = torch.fft.ifftshift(im_fft, dim=dims)
     im_fft = torch.real(torch.fft.ifftn(im_fft, dim=dims)).contiguous()
-    im_fft = torch.clamp(im_fft, image.min().item(), image.max().item())
+    if clamp_range is None:
+        clamp_range = (image.min().item(), image.max().item())
+    im_fft = torch.clamp(im_fft, clamp_range[0], clamp_range[1])
     return im_fft
     
 

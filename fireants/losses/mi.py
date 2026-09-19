@@ -137,12 +137,29 @@ class GlobalMutualInformationLoss(nn.Module):
             raise ValueError
         return pred_weight, pred_probability, target_weight, target_probability
 
-    def parzen_windowing_b_spline(self, img: torch.Tensor, order: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def parzen_windowing_weights(
+        self, pred: torch.Tensor, target: torch.Tensor, stats: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Per-sample bin weights of `pred` and `target`, binned by the extrema in `stats`.
+
+        `stats` is an `intensity_stats` vector; passing it explicitly lets a caller that
+        holds only part of the volume bin it the way the whole volume would be binned.
+        """
+        if self.kernel_type == "gaussian":
+            return self.parzen_windowing_gaussian(pred)[0], self.parzen_windowing_gaussian(target)[0]
+        if self.kernel_type == "b-spline":
+            return (self.parzen_windowing_b_spline(pred, order=3, extrema=stats[0:2])[0],
+                    self.parzen_windowing_b_spline(target, order=3, extrema=stats[2:4])[0])
+        raise ValueError
+
+    def parzen_windowing_b_spline(self, img: torch.Tensor, order: int,
+                                  extrema: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Parzen windowing with b-spline kernel (adapted from ITK)
         Args:
             img: the shape should be B[NDHW].
             order: int.
+            extrema: (min, max) of `img` to size the bins with, `img`'s own by default.
         """
         # Compute binsize for the histograms.
         #
@@ -157,7 +174,7 @@ class GlobalMutualInformationLoss(nn.Module):
         # Note that there can still be non-zero bin values in the padded region,
         # it's just that these bins will never be a central bin for the Parzen
         # window.
-        _max, _min = torch.max(img), torch.min(img)
+        _max, _min = (torch.max(img), torch.min(img)) if extrema is None else (extrema[1], extrema[0])
         padding = 2
         bin_size = (_max - _min) / (self.num_bins - 2 * padding)
         norm_min = torch.div(_min, bin_size) - padding
@@ -206,6 +223,43 @@ class GlobalMutualInformationLoss(nn.Module):
 
     def get_image_padding(self) -> int:
         return 0
+
+    def intensity_stats(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """The extrema that fix the bin layout: [pred min, pred max, target min, target max].
+
+        A caller holding one part of the volume reduces these elementwise over all the
+        parts before windowing: parts that bin differently produce histograms that
+        cannot be added. Differentiable, as the normalization by the maximum is.
+        """
+        return torch.stack([pred.min(), pred.max(), target.min(), target.max()])
+
+    def shard_histograms(self, pred: torch.Tensor, target: torch.Tensor,
+                         stats: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+        """This part's unnormalized Parzen histograms (pab, pa, pb) and its sample count.
+
+        `pred` and `target` are B1[...] single-channel tensors and `stats` the
+        `intensity_stats` of the whole volume. Summing (pab, pa, pb, n) over every part
+        and passing the sums to `mi_from_histograms` gives the mutual information of the
+        whole volume exactly.
+        """
+        if target.shape != pred.shape:
+            raise ValueError(f"ground truth has differing shape ({target.shape}) from pred ({pred.shape})")
+        maxval = torch.maximum(stats[1], stats[3])
+        if maxval > 1:
+            pred = pred / maxval
+            target = target / maxval
+            stats = stats / maxval
+        wa, wb = self.parzen_windowing_weights(pred, target, stats)  # (batch, num_sample, num_bin)
+        pab = torch.bmm(wa.permute(0, 2, 1), wb.to(wa))  # (batch, num_bins, num_bins)
+        return pab, wa.sum(dim=-2, keepdim=True), wb.sum(dim=-2, keepdim=True), wa.shape[1]
+
+    def mi_from_histograms(self, pab: torch.Tensor, pa: torch.Tensor, pb: torch.Tensor,
+                           n_samples: int) -> torch.Tensor:
+        """Per-batch mutual information of summed `shard_histograms`, before the negation."""
+        pab = pab / n_samples
+        pa, pb = pa / n_samples, pb / n_samples
+        papb = torch.bmm(pa.permute(0, 2, 1), pb.to(pa))  # (batch, num_bins, num_bins)
+        return torch.sum(pab * torch.log((pab + self.smooth_nr) / (papb + self.smooth_dr) + self.smooth_dr), dim=(1, 2))
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
@@ -271,30 +325,27 @@ class GlobalMutualInformationLoss(nn.Module):
         Raises:
             ValueError: When ``self.reduction`` is not one of ["mean", "sum", "none"].
         """
-        maxval = max(pred.max(), target.max())
-        if maxval > 1:
-            pred = pred / maxval
-            target = target / maxval
-
-        if target.shape != pred.shape:
-            raise ValueError(f"ground truth has differing shape ({target.shape}) from pred ({pred.shape})")
-        wa, pa, wb, pb = self.parzen_windowing(pred, target)  # (batch, num_sample, num_bin), (batch, 1, num_bin)
-
         # only perform reduction across grid parallel ranks
         if parallel_state.is_initialized() and parallel_state.get_grid_parallel_size() > 1:
+            maxval = max(pred.max(), target.max())
+            if maxval > 1:
+                pred = pred / maxval
+                target = target / maxval
+            if target.shape != pred.shape:
+                raise ValueError(f"ground truth has differing shape ({target.shape}) from pred ({pred.shape})")
+            wa, pa, wb, pb = self.parzen_windowing(pred, target)  # (batch, num_sample, num_bin), (batch, 1, num_bin)
             pab = torch.bmm(wa.permute(0, 2, 1), wb.to(wa))
             pab, pa, pb = allgather_mi.apply(pab, pa, pb, wa.shape[1])
             # divide by total number of samples (this is not exact but approximate)
             world_size = parallel_state.get_grid_parallel_size()
             pab = pab.div(world_size * wa.shape[1])
-            papb = torch.bmm(pa.permute(0, 2, 1), pb.to(pa))
-        else:
-            pab = torch.bmm(wa.permute(0, 2, 1), wb.to(wa)).div(wa.shape[1])  # (batch, num_bins, num_bins)
             papb = torch.bmm(pa.permute(0, 2, 1), pb.to(pa))  # (batch, num_bins, num_bins)
-
-        mi = torch.sum(
-            pab * torch.log((pab + self.smooth_nr) / (papb + self.smooth_dr) + self.smooth_dr), dim=(1, 2)
-        )  # (batch)
+            mi = torch.sum(
+                pab * torch.log((pab + self.smooth_nr) / (papb + self.smooth_dr) + self.smooth_dr), dim=(1, 2)
+            )  # (batch)
+        else:
+            pab, pa, pb, n = self.shard_histograms(pred, target, self.intensity_stats(pred, target))
+            mi = self.mi_from_histograms(pab, pa, pb, n)  # (batch)
 
         if self.reduction == 'sum':
             return torch.sum(mi).neg()  # sum over the batch and channel ndims
