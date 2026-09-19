@@ -19,7 +19,9 @@ quantity that couples neighbouring slabs (the local loss windows, the gradient
 and warp smoothing, the compositional update) reads a halo copied from the
 neighbouring device, so the optimization follows `GreedyRegistration` up to
 floating-point summation order. Halos of the moved image are copied inside
-autograd, which carries the loss gradient across the seams.
+autograd, which carries the loss gradient across the seams. Mutual information reads
+no neighbourhood and so needs no halo, but is global over space: its Parzen histograms
+and the intensity extrema that bin them are reduced over the slabs instead.
 
 Optionally the loss is evaluated a few feature channels at a time
 (`channel_chunk`), which bounds the loss memory by the chunk instead of the
@@ -38,6 +40,7 @@ from tqdm import tqdm
 from fireants.interpolator import fireants_interpolator
 from fireants.io.image import BatchedImages, FakeBatchedImages
 from fireants.losses.cc import gaussian_1d, separable_filtering
+from fireants.losses.maskedutils import get_mask_function
 from fireants.registration.abstract import AbstractRegistration
 from fireants.registration.deformablemixin import DeformableMixin
 from fireants.registration.optimizers.adam import adam_update_fused
@@ -139,9 +142,10 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
             memory. Faster over NVLink, but some PCIe hosts corrupt such copies, at
             times intermittently; enable it only on hardware known to be sound.
 
-    The images may live on the CPU: only slabs are moved to the devices. The
-    loss must be local (`cc`, `fusedcc`, `mse` and their masked variants), the
-    deformation compositive and the optimizer Adam.
+    The images may live on the CPU: only slabs are moved to the devices. The loss
+    must be local (`cc`, `fusedcc`, `mse` and their masked variants) or mutual
+    information (`mi`, `masked_mi`), whose histograms are summed over the slabs
+    instead; the deformation must be compositive and the optimizer Adam.
     """
 
     def __init__(self, scales: List[float], iterations: List[int],
@@ -185,10 +189,14 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
             raise NotImplementedError("sharded registration supports the Adam optimizer only")
         if reduction not in ("mean", "sum"):
             raise ValueError(f"unsupported reduction: {reduction}")
-        if not (hasattr(self.loss_fn, "forward_util") and hasattr(self.loss_fn, "get_image_padding")) \
-                or "MutualInformation" in type(self.loss_fn).__name__:
-            raise NotImplementedError(
-                f"{type(self.loss_fn).__name__} is not a local loss; sharded registration needs cc, fusedcc or mse")
+        self._is_mi = "MutualInformation" in type(self.loss_fn).__name__
+        if not (hasattr(self.loss_fn, "forward_util") and hasattr(self.loss_fn, "get_image_padding")):
+            raise NotImplementedError(f"{type(self.loss_fn).__name__} cannot be split over slabs; "
+                                      "sharded registration needs cc, fusedcc, mse or mi")
+        if self._is_mi and not all(hasattr(self.loss_fn, name)
+                                   for name in ("intensity_stats", "shard_histograms", "mi_from_histograms")):
+            raise NotImplementedError(f"{type(self.loss_fn).__name__} cannot split its Parzen histograms; "
+                                      "sharded registration needs mi")
         if fixed_images().shape[0] != moving_images().shape[0]:
             raise NotImplementedError("sharded registration needs equal fixed and moving batch sizes")
 
@@ -511,6 +519,92 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
                 shard.grad_denominator = None
         return (numerator * scale).mean().item()
 
+    # -------------------------------------------------------------- mutual information
+
+    def _mi_mask_coords(self):
+        """Flat indices of the in-mask voxels of every slab, per batch item.
+
+        Masked MI selects voxels rather than weighting them, so the mask enters only
+        through these indices and carries no gradient.
+        """
+        mode = self.loss_fn.mask_mode
+        coords = [[] for _ in range(self.opt_size)]
+        for shard in self._shards:
+            with torch.cuda.device(shard.device), torch.no_grad():
+                mask = get_mask_function(self._sample(shard, shard.moving_mask), shard.fixed_mask, mode)
+                for b in range(self.opt_size):
+                    coords[b].append(torch.nonzero(mask[b].reshape(-1) >= 0.5, as_tuple=True)[0])
+        return coords
+
+    def _mi_value(self, samples):
+        """Mutual information over all slabs of one channel, as a [N] tensor on device 0.
+
+        `samples` pairs a shard with its (pred, target) slab of shape [N, 1, ...]. The
+        intensity extrema are reduced first, so every slab lays out its bins the same
+        way, then the Parzen histograms are summed: both reductions run inside autograd,
+        which sends the gradient back to each slab.
+        """
+        device = self.devices[0]
+        stats = []
+        for shard, pred, target in samples:
+            with torch.cuda.device(shard.device):
+                stats.append(self._move(self._losses[shard.device].intensity_stats(pred, target), device))
+        stats = torch.stack(stats)
+        stats = torch.stack([stats[:, 0].min(), stats[:, 1].max(), stats[:, 2].min(), stats[:, 3].max()])
+
+        pab = pa = pb = None
+        total = 0
+        for shard, pred, target in samples:
+            with torch.cuda.device(shard.device):
+                parts = self._losses[shard.device].shard_histograms(pred, target, self._move(stats, shard.device))
+            moved = [self._move(p, device) for p in parts[:3]]
+            pab, pa, pb = moved if pab is None else [x + y for x, y in zip((pab, pa, pb), moved)]
+            total += parts[3]
+        return self._losses[device].mi_from_histograms(pab, pa, pb, total)
+
+    def _mi_loss_and_gradients(self):
+        """Accumulate d(loss)/d(warp) in every slab's `warp.grad` and return the loss.
+
+        MI reads no spatial neighbourhood, so no halo is exchanged; it is global over
+        space, so the histograms rather than the per-voxel values are what gets summed
+        across the slabs. Channels are independent and run a chunk at a time.
+        """
+        device = self.devices[0]
+        batch = self.opt_size
+        channels = sum(c.shape[1] for c in self._shards[0].fixed)
+        weight = 1.0 if self.reduction == "sum" else 1.0 / (batch * channels)
+        coords = self._mi_mask_coords() if self.masked else None
+
+        total = 0.0
+        for k in range(len(self._shards[0].fixed)):
+            moved = []
+            for shard in self._shards:
+                with torch.cuda.device(shard.device):
+                    moved.append(self._sample(shard, shard.moving[k]))
+            value = torch.zeros((), dtype=self.dtype, device=device)
+            for c in range(self._shards[0].fixed[k].shape[1]):
+                if not self.masked:
+                    samples = [(s, m[:, c:c + 1], s.fixed[k][:, c:c + 1]) for s, m in zip(self._shards, moved)]
+                    value = value - self._mi_value(samples).sum()
+                    continue
+                for b in range(batch):
+                    samples = []
+                    for i, (shard, m) in enumerate(zip(self._shards, moved)):
+                        index = coords[b][i]
+                        if index.numel() == 0:
+                            continue
+                        with torch.cuda.device(shard.device):
+                            pred = m[b:b + 1, c:c + 1].reshape(1, 1, -1)[:, :, index]
+                            target = shard.fixed[k][b:b + 1, c:c + 1].reshape(1, 1, -1)[:, :, index]
+                        samples.append((shard, pred, target))
+                    if not samples:
+                        raise ValueError("encountered zero mask, cannot compute mutual information")
+                    value = value - self._mi_value(samples).sum()
+            (value * weight).backward()
+            total += value.item() * weight
+            del moved, value
+        return total
+
     def _step(self, halos):
         """The WarpAdam diffeomorphic update, with its global quantities taken over all slabs."""
         grad_halo, warp_halo, compose_halo = halos
@@ -624,7 +718,7 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
                 for shard in self._shards:
                     shard.warp.grad = None
                 self._refresh_moving(self._moving_level, self._affine)
-                loss = self._loss_and_gradients(self._cc_halo)
+                loss = self._mi_loss_and_gradients() if self._is_mi else self._loss_and_gradients(self._cc_halo)
                 if self.progress_bar:
                     pbar.set_description("scale: {}, iter: {}/{}, loss: {:4f}".format(scale, i, iters, loss / scale_factor))
                 if best is not None:

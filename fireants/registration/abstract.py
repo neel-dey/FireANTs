@@ -15,6 +15,7 @@
 
 from abc import ABC, abstractmethod
 from typing import List, Callable
+import numpy as np
 import torch
 from torch import nn
 from fireants.utils.util import _assert_check_scales_decreasing
@@ -82,6 +83,8 @@ class AbstractRegistration(ABC):
             Default: False.
         channel_chunk (int, optional): In rigid and affine registration, evaluate the loss this many
             image channels at a time and accumulate the gradient: same loss and gradient, less memory.
+            The images may then be left in host memory (a `FakeBatchedImages` over CPU channels
+            with a CUDA geometry): only the chunk in flight is copied to the compute device.
             Needs a local loss (cc, fusedcc, mse or their masked variants). Deformable registration
             has this option in `ShardedGreedyRegistration`. Default: None (all channels at once).
         keep_best (bool, optional): In rigid, affine, and greedy registration, restore
@@ -201,8 +204,7 @@ class AbstractRegistration(ABC):
 
         # see if loss can store the iterations
         self.channel_chunk = channel_chunk
-        if channel_chunk is not None and (not hasattr(self.loss_fn, 'forward_util')
-                                          or 'MutualInformation' in type(self.loss_fn).__name__):
+        if channel_chunk is not None and not self._loss_is_local():
             raise NotImplementedError(f"channel_chunk needs a local loss, not {type(self.loss_fn).__name__}")
 
         if hasattr(self.loss_fn, 'set_iterations'):
@@ -217,15 +219,81 @@ class AbstractRegistration(ABC):
     def print_init_msg(self):
         logger.info(f"Registration of type {self.__class__.__name__} initialized with dtype {self.dtype}")
 
+    @property
+    def compute_device(self) -> torch.device:
+        """Where the transform lives and the loss is evaluated.
+
+        This is the geometry's device, which the image arrays need not share: they may be
+        left in host memory and staged to it a channel chunk at a time.
+        """
+        return self.fixed_images.get_torch2phy().device
+
+    def _loss_is_local(self) -> bool:
+        """Whether the loss is a per-voxel one that can be summed over channel chunks."""
+        return (hasattr(self.loss_fn, 'forward_util')
+                and 'MutualInformation' not in type(self.loss_fn).__name__)
+
+    def _linear_chunk(self, arrays: torch.Tensor) -> Optional[int]:
+        """Image channels per loss chunk in a linear stage, or None to take them all at once.
+
+        Arrays outside `compute_device` are always chunked: that is what keeps all but the
+        chunk in flight out of GPU memory.
+        """
+        if self.channel_chunk is None and arrays.device == self.compute_device:
+            return None
+        if not self._loss_is_local():
+            what = "channel_chunk" if self.channel_chunk is not None else "registering host-resident arrays"
+            raise NotImplementedError(f"{what} needs a local loss, not {type(self.loss_fn).__name__}")
+        return self.channel_chunk or arrays.shape[1]
+
+    def _level_arrays(self, arrays: torch.Tensor, size, mode: str, gaussians=None,
+                      smooth: bool = False) -> torch.Tensor:
+        """`arrays` resized to one pyramid level's `size`, computed on `compute_device`.
+
+        Arrays that live elsewhere are resized a few channels at a time and the result is
+        left where they are; `clamp_range` makes a channel subset downsample exactly as the
+        whole volume would. `smooth` additionally Gaussian-filters the image channels. The
+        mask channel is resized but never smoothed.
+        """
+        device = self.compute_device
+        if arrays.device == device:
+            level = self._downsample_image_and_mask(arrays, size=size, mode=mode, gaussians=gaussians)
+            return self._smooth_image_not_mask(level, gaussians) if smooth else level
+        img, mask = self._split_image_and_mask_last_channel(arrays)
+        out = torch.empty([*arrays.shape[:2], *size], dtype=arrays.dtype, device=arrays.device)
+        clamp_range = (img.min().item(), img.max().item()) if gaussians is not None else None
+        # the FFT downsampler holds several complex copies of its input, and that transient sets
+        # the peak if it is allowed to grow: keep the input it sees near 8 MiB
+        chunk = max(1, int(2 ** 23 // max(int(np.prod(arrays.shape[2:])) * arrays.shape[0], 1)))
+        for c0 in range(0, img.shape[1], chunk):
+            part = img[:, c0:c0 + chunk].to(device)
+            if gaussians is None:
+                part = F.interpolate(part, size=size, mode=mode, align_corners=True)
+            else:
+                part = downsample(part, size=size, mode=mode, gaussians=gaussians, clamp_range=clamp_range)
+                if smooth:
+                    part = separable_filtering(part, gaussians)
+            out[:, c0:c0 + part.shape[1]] = part.to(out.device)
+        if mask is not None:
+            out[:, -1:] = F.interpolate(mask.to(device), size=size, mode=mode,
+                                        align_corners=True).to(out.device)
+        return out
+
     def _loss_backward_in_chunks(self, resample: Callable, affine: torch.Tensor,
-                                 moving: torch.Tensor, fixed: torch.Tensor) -> float:
-        """Backpropagate `loss_fn(resample(moving, affine), fixed)` `channel_chunk` image channels at a time.
+                                 moving: torch.Tensor, fixed: torch.Tensor, chunk: int) -> float:
+        """Backpropagate `loss_fn(resample(moving, affine), fixed)` `chunk` image channels at a time.
 
         `resample(image, affine)` puts a subset of the moving channels on the fixed grid.
-        The chunks' gradients are summed on a detached copy of `affine` and sent through
-        its graph once. Returns the loss value.
+        Channels of host-resident arrays reach `affine`'s device one chunk at a time. The
+        chunks' gradients are summed on a detached copy of `affine` and sent through its
+        graph once. Returns the loss value.
         """
         matrix = affine.detach().requires_grad_(True)
+        device = matrix.device
+
+        def stage(image):
+            """One channel slice on the compute device; arrays already there are handed back as they are."""
+            return image if image.device == device else image.to(device)
 
         def sample(image):
             return resample(image.contiguous(), matrix)
@@ -233,15 +301,18 @@ class AbstractRegistration(ABC):
         loss_fn = self.loss_fn
         reduction = loss_fn.masked_reduction if self.masked else loss_fn.reduction
         channels = fixed.shape[1] - (1 if self.masked else 0)
-        chunks = [(c, min(c + self.channel_chunk, channels)) for c in range(0, channels, self.channel_chunk)]
+        chunks = [(c, min(c + chunk, channels)) for c in range(0, channels, chunk)]
         space = tuple(range(1, fixed.dim()))
-        fixed_mask = fixed[:, -1:] if self.masked else None
+        # the masks are one channel each: they stay on the compute device for the whole step
+        fixed_mask = stage(fixed[:, -1:]) if self.masked else None
+        moving_mask = stage(moving[:, -1:]) if self.masked else None
 
         def numerator(c0, c1):
             """Per-image sum of the per-voxel loss of channels [c0, c1), inside the mask if any."""
-            values = loss_fn.forward_util(sample(moving[:, c0:c1]), fixed[:, c0:c1].contiguous())
+            values = loss_fn.forward_util(sample(stage(moving[:, c0:c1])),
+                                          stage(fixed[:, c0:c1]).contiguous())
             if self.masked:
-                values = values * (fixed_mask * sample(moving[:, -1:]))
+                values = values * (fixed_mask * sample(moving_mask))
             return values.sum(dim=space)
 
         previous, loss_fn.reduction = loss_fn.reduction, 'none'
@@ -258,10 +329,10 @@ class AbstractRegistration(ABC):
             # masked mean: loss = mean_b N_b / (D_b + eps). Measure N and D first, then
             # backpropagate dN / (D + eps) - N dD / (D + eps)^2 piece by piece.
             with torch.no_grad():
-                denominator = (fixed_mask * sample(moving[:, -1:])).sum(dim=space) + 1e-8
+                denominator = (fixed_mask * sample(moving_mask)).sum(dim=space) + 1e-8
                 total = sum(numerator(c0, c1) for c0, c1 in chunks)
             batch = fixed.shape[0]
-            mask_sum = (fixed_mask * sample(moving[:, -1:])).sum(dim=space)
+            mask_sum = (fixed_mask * sample(moving_mask)).sum(dim=space)
             (-(mask_sum * total / (denominator * denominator)).sum() / batch).backward()
             for c0, c1 in chunks:
                 ((numerator(c0, c1) / denominator).sum() / batch).backward()

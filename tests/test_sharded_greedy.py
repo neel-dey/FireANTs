@@ -56,7 +56,66 @@ def _mean_difference(a, b):
     return (a - b).norm(dim=-1).mean().item()
 
 
-@pytest.mark.parametrize("loss", ["cc", "masked_cc", "mse"])
+def _mi_setup(devices, loss, channel_chunk=None, scale=4):
+    """A sharded registration at one level whose `_sample` is the identity.
+
+    Every slab's moving image is replaced by a leaf tensor already on the fixed grid,
+    so a comparison against the stock loss sees the histogram reduction alone and not
+    the resampling. Returns the whole fixed and moved volumes and the leaves.
+    """
+    (fixed_geom, fixed), (moving_geom, moving) = _load("cpu")
+    if not loss.startswith("masked_"):
+        fixed, moving = fixed[:, :-1].contiguous(), moving[:, :-1].contiguous()
+    reg = ShardedGreedyRegistration(scales=[scale], iterations=[1], devices=devices, loss_type=loss,
+                                    fixed_images=FakeBatchedImages(fixed, fixed_geom),
+                                    moving_images=FakeBatchedImages(moving, moving_geom),
+                                    channel_chunk=channel_chunk, progress_bar=False)
+    reg._prepare()
+    reg._begin_level(scale, 1)
+    whole = torch.cat([torch.cat([s.fixed[k].cpu() for s in reg._shards], dim=reg._idim)
+                       for k in range(len(reg._shards[0].fixed))], dim=1)
+    torch.manual_seed(0)
+    moved = torch.roll(whole, 2, dims=reg._idim) + 0.05 * torch.rand_like(whole)  # correlated: MI is not near zero
+    mask = (torch.rand(reg.opt_size, 1, *reg._level_size) > 0.3).float() if reg.masked else None
+    leaves = []
+    for shard in reg._shards:
+        width = shard.hi - shard.lo
+        shard.moving = [moved[:, c0:c1].narrow(reg._idim, shard.lo, width).to(shard.device).requires_grad_(True)
+                        for c0, c1 in reg._channel_chunks(moved.shape[1])]
+        leaves.append(shard.moving)
+        if reg.masked:
+            shard.moving_mask = mask.narrow(reg._idim, shard.lo, width).to(shard.device).contiguous()
+    reg._sample = lambda shard, image: image
+    return reg, whole, moved, mask, leaves
+
+
+@pytest.mark.parametrize("loss", ["mi", "masked_mi"])
+@pytest.mark.parametrize("devices,chunk", [(["cuda:0"], None), (["cuda:0"], 1), (["cuda:0", "cuda:1"], 2)])
+def test_mi_matches_single_device(loss, devices, chunk):
+    """The sharded histograms give the global mutual information, not a per-slab average."""
+    if torch.cuda.device_count() < len(devices):
+        pytest.skip("needs two GPUs")
+    reg, whole, moved, mask, leaves = _mi_setup(devices, loss, chunk)
+    sharded = reg._mi_loss_and_gradients()
+
+    device = reg.devices[0]
+    pred, target = moved.to(device).requires_grad_(True), whole.to(device)
+    if reg.masked:
+        fixed_mask = torch.cat([s.fixed_mask.cpu() for s in reg._shards], dim=reg._idim).to(device)
+        reference = reg.loss_fn(torch.cat([pred, mask.to(device)], 1), torch.cat([target, fixed_mask], 1))
+    else:
+        reference = reg.loss_fn(pred, target)
+    reference.backward()
+
+    assert abs(sharded - reference.item()) <= 1e-5 * abs(reference.item())
+    grad = torch.zeros_like(moved)
+    for shard, parts in zip(reg._shards, leaves):
+        for (c0, c1), leaf in zip(reg._channel_chunks(moved.shape[1]), parts):
+            grad[:, c0:c1].narrow(reg._idim, shard.lo, shard.hi - shard.lo).copy_(leaf.grad.cpu())
+    assert (grad - pred.grad.cpu()).norm().item() <= 1e-5 * pred.grad.norm().item()
+
+
+@pytest.mark.parametrize("loss", ["cc", "masked_cc", "mse", "mi", "masked_mi"])
 def test_one_device_matches_greedy(loss):
     reference = _register(GreedyRegistration, loss, "cuda:0")
     sharded = _register(ShardedGreedyRegistration, loss, "cpu", devices=["cuda:0"])
@@ -66,7 +125,7 @@ def test_one_device_matches_greedy(loss):
 
 
 @pytest.mark.skipif(torch.cuda.device_count() < 2, reason="needs two GPUs")
-@pytest.mark.parametrize("loss", ["cc", "masked_cc"])
+@pytest.mark.parametrize("loss", ["cc", "masked_cc", "mi", "masked_mi"])
 @pytest.mark.parametrize("dim_to_shard", [0, 2])
 def test_two_devices_match_greedy(loss, dim_to_shard):
     reference = _register(GreedyRegistration, loss, "cuda:0")
@@ -76,9 +135,10 @@ def test_two_devices_match_greedy(loss, dim_to_shard):
     assert _mean_difference(reference, sharded) < 5e-2
 
 
-def test_rejects_global_loss():
+def test_rejects_unsplittable_loss():
     (fixed_geom, fixed), (moving_geom, moving) = _load("cpu")
     with pytest.raises(NotImplementedError):
-        ShardedGreedyRegistration(scales=[1], iterations=[1], devices=["cuda:0"], loss_type="mi",
+        ShardedGreedyRegistration(scales=[1], iterations=[1], devices=["cuda:0"], loss_type="custom",
+                                  custom_loss=torch.nn.MSELoss(),
                                   fixed_images=FakeBatchedImages(fixed[:, :1].contiguous(), fixed_geom),
                                   moving_images=FakeBatchedImages(moving[:, :1].contiguous(), moving_geom))

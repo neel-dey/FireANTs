@@ -109,7 +109,7 @@ class RigidRegistration(AbstractRegistration):
                          cc_kernel_size=cc_kernel_size,
                          tolerance=tolerance, max_tolerance_iters=max_tolerance_iters, **kwargs)
         # initialize transform
-        device = fixed_images.device
+        device = self.compute_device
         self.dims = dims = self.moving_images.dims
         # 2D: one angle; 3D: quaternion (w,x,y,z)
         self.rotation_dims = rotation_dims = (1 if dims == 2 else 4)
@@ -328,6 +328,9 @@ class RigidRegistration(AbstractRegistration):
         fixed_t2p = self.fixed_images.get_torch2phy().to(self.dtype)
         moving_p2t = self.moving_images.get_phy2torch().to(self.dtype)
         fixed_size = fixed_arrays.shape[2:]
+        # the arrays may live in host memory; the transform and the loss are on this device
+        device = self.compute_device
+        chunk = self._linear_chunk(fixed_arrays)
         # save initial affine transform to initialize grid 
 
         for scale, iters in zip(self.scales, self.iterations):
@@ -344,31 +347,19 @@ class RigidRegistration(AbstractRegistration):
             if self.blur and scale > 1:
                 sigmas = 0.5 * torch.tensor(
                     [sz / szdown for sz, szdown in zip(fixed_size, size_down)],
-                    device=fixed_arrays.device,
+                    device=device,
                     dtype=moving_arrays.dtype,
                 )
                 gaussians = [gaussian_1d(s, truncated=2) for s in sigmas]
-                fixed_image_down = self._downsample_image_and_mask(
-                    fixed_arrays,
-                    size=size_down,
-                    mode=self.fixed_images.interpolate_mode,
-                    gaussians=gaussians,
-                    align_corners=True,
-                )
-                moving_image_blur = self._downsample_image_and_mask(
-                    moving_arrays,
-                    size=mov_size_down,
-                    mode=self.moving_images.interpolate_mode,
-                    gaussians=gaussians,
-                    align_corners=True,
-                )
-                # extra Gaussian smoothing should also ignore the mask channel
-                moving_image_blur = self._smooth_image_not_mask(moving_image_blur, gaussians)
+                fixed_image_down = self._level_arrays(
+                    fixed_arrays, size_down, self.fixed_images.interpolate_mode, gaussians)
+                # the extra Gaussian smoothing of the moving image also ignores the mask channel
+                moving_image_blur = self._level_arrays(
+                    moving_arrays, mov_size_down, self.moving_images.interpolate_mode, gaussians, smooth=True)
             else:
                 if scale > 1:
-                    fixed_image_down = F.interpolate(
-                        fixed_arrays, size=size_down, mode=self.fixed_images.interpolate_mode, align_corners=True
-                    )
+                    fixed_image_down = self._level_arrays(
+                        fixed_arrays, size_down, self.fixed_images.interpolate_mode)
                 else:
                     fixed_image_down = fixed_arrays
                 moving_image_blur = moving_arrays
@@ -381,7 +372,7 @@ class RigidRegistration(AbstractRegistration):
                 self.optimizer.zero_grad()
                 rigid_matrix = self.get_rigid_matrix()
                 mat = ((moving_p2t @ rigid_matrix @ fixed_t2p)[:, :-1]).contiguous()
-                if self.channel_chunk is None:
+                if chunk is None:
                     # sample from these coords
                     moved_image = fireants_interpolator(moving_image_blur, affine=mat.to(moving_image_blur.dtype), 
                                     out_shape=fixed_image_down.shape, mode='bilinear', align_corners=True)  # [N, C, H, W, [D]]
@@ -393,7 +384,7 @@ class RigidRegistration(AbstractRegistration):
                         shape = [image.shape[0], image.shape[1], *fixed_image_down.shape[2:]]
                         return fireants_interpolator(image, affine=matrix, out_shape=shape, mode='bilinear', align_corners=True)
                     cur_loss = self._loss_backward_in_chunks(
-                        resample, mat.to(moving_image_blur.dtype), moving_image_blur, fixed_image_down)
+                        resample, mat.to(moving_image_blur.dtype), moving_image_blur, fixed_image_down, chunk)
                 # Save parameters before the optimizer changes them.
                 if best is not None:
                     best.measured(cur_loss)
