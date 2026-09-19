@@ -61,6 +61,23 @@ def test_host_resident_matches_full(cls, loss):
 
 
 @pytest.mark.parametrize("cls", [RigidRegistration, AffineRegistration])
+@pytest.mark.parametrize("host", ["fixed", "moving"])
+def test_one_side_in_host_memory(cls, host):
+    """Either image alone may be the host-resident one; staging reads both."""
+    sides = dict(zip(("fixed", "moving"), _images(False)))
+    on_host = sides[host]
+    sides[host] = FakeBatchedImages(on_host().cpu(), on_host.batched_images)
+    fixed, moving = sides["fixed"], sides["moving"]
+
+    reg = cls(scales=[4, 2, 1], iterations=[40, 30, 20], fixed_images=fixed, moving_images=moving,
+              loss_type="mse", cc_kernel_size=5, optimizer="Adam", optimizer_lr=3e-3,
+              progress_bar=False)
+    reg.optimize()  # staging read only the fixed side, and the sampler saw two devices
+    matrix = reg.get_rigid_matrix() if cls is RigidRegistration else reg.get_affine_matrix()
+    assert torch.allclose(matrix.detach().cpu(), _matrix(cls, "mse", None), atol=2e-3, rtol=0)
+
+
+@pytest.mark.parametrize("cls", [RigidRegistration, AffineRegistration])
 def test_host_arrays_never_reach_the_gpu_whole(cls):
     """Host-resident channels cost GPU memory a chunk at a time, and stay on the host."""
     def peak(device):

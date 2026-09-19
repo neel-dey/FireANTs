@@ -234,18 +234,19 @@ class AbstractRegistration(ABC):
         return (hasattr(self.loss_fn, 'forward_util')
                 and 'MutualInformation' not in type(self.loss_fn).__name__)
 
-    def _linear_chunk(self, arrays: torch.Tensor) -> Optional[int]:
+    def _linear_chunk(self, *arrays: torch.Tensor) -> Optional[int]:
         """Image channels per loss chunk in a linear stage, or None to take them all at once.
 
         Arrays outside `compute_device` are always chunked: that is what keeps all but the
-        chunk in flight out of GPU memory.
+        chunk in flight out of GPU memory. Pass every array the stage samples, fixed
+        first — either image alone may be the one left in host memory.
         """
-        if self.channel_chunk is None and arrays.device == self.compute_device:
+        if self.channel_chunk is None and all(a.device == self.compute_device for a in arrays):
             return None
         if not self._loss_is_local():
             what = "channel_chunk" if self.channel_chunk is not None else "registering host-resident arrays"
             raise NotImplementedError(f"{what} needs a local loss, not {type(self.loss_fn).__name__}")
-        return self.channel_chunk or arrays.shape[1]
+        return self.channel_chunk or arrays[0].shape[1]
 
     def _level_arrays(self, arrays: torch.Tensor, size, mode: str, gaussians=None,
                       smooth: bool = False) -> torch.Tensor:

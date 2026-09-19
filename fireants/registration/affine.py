@@ -310,7 +310,7 @@ class AffineRegistration(AbstractRegistration):
         fixed_size = fixed_arrays.shape[2:]
         # the arrays may live in host memory; the transform and the loss are on this device
         device = self.compute_device
-        chunk = self._linear_chunk(fixed_arrays)
+        chunk = self._linear_chunk(fixed_arrays, moving_arrays)
         # save initial affine transform to initialize grid 
 
         for scale, iters in zip(self.scales, self.iterations):

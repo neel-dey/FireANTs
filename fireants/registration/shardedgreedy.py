@@ -627,7 +627,11 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
     def _step(self, halos):
         """The WarpAdam diffeomorphic update, with its global quantities taken over all slabs."""
         grad_halo, warp_halo, compose_halo = halos
-        grads = [s.warp.grad for s in self._shards]
+        # A slab whose mask selected no voxels never reached the loss, so it has no
+        # gradient. It still takes the update: smoothing reaches into it from its
+        # neighbours, and its Adam moments have to decay in step with theirs.
+        grads = [s.warp.grad if s.warp.grad is not None else torch.zeros_like(s.warp.data)
+                 for s in self._shards]
         if self.smooth_grad_sigma > 0:
             grads = self._smooth(grads, self._grad_gaussians, grad_halo)
 

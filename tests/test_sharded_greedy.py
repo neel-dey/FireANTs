@@ -135,6 +135,33 @@ def test_two_devices_match_greedy(loss, dim_to_shard):
     assert _mean_difference(reference, sharded) < 5e-2
 
 
+@pytest.mark.skipif(torch.cuda.device_count() < 2, reason="needs two GPUs")
+@pytest.mark.parametrize("loss", ["masked_mi", "masked_cc"])
+def test_roi_confined_to_one_slab(loss):
+    """A mask that misses a slab entirely: no voxel of it reaches the loss.
+
+    Masked MI selects voxels, so such a slab gets no gradient at all; it still has
+    to take the update, which its neighbour's smoothing halo reaches into.
+    """
+    def register(devices):
+        (fixed_geom, fixed), (moving_geom, moving) = _load("cpu")
+        for channels in (fixed, moving):
+            channels[:, -1:] = 0
+            channels[:, -1:, :channels.shape[2] // 3] = 1  # inside the first slab of axis 0
+        reg = ShardedGreedyRegistration(
+            scales=SCALES, iterations=ITERATIONS, devices=devices, dim_to_shard=0,
+            fixed_images=FakeBatchedImages(fixed, fixed_geom),
+            moving_images=FakeBatchedImages(moving, moving_geom),
+            loss_type=loss, cc_kernel_size=[7, 5, 5], optimizer="Adam", optimizer_lr=0.5,
+            progress_bar=False)
+        reg.optimize()
+        return reg.get_warp().detach().cpu()
+
+    one, two = register(["cuda:0"]), register(["cuda:0", "cuda:1"])
+    assert torch.isfinite(two).all()
+    assert _mean_difference(one, two) < 5e-2
+
+
 def test_rejects_unsplittable_loss():
     (fixed_geom, fixed), (moving_geom, moving) = _load("cpu")
     with pytest.raises(NotImplementedError):
