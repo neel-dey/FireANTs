@@ -40,7 +40,7 @@ from tqdm import tqdm
 from fireants.interpolator import fireants_interpolator
 from fireants.io.image import BatchedImages, FakeBatchedImages
 from fireants.losses.cc import gaussian_1d, separable_filtering
-from fireants.losses.maskedutils import get_mask_function
+from fireants.losses.maskedutils import DEFAULT_MASK_MODE, get_mask_function
 from fireants.registration.abstract import AbstractRegistration
 from fireants.registration.deformablemixin import DeformableMixin
 from fireants.registration.optimizers.adam import adam_update_fused
@@ -287,6 +287,19 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
         self._level_size = list(level_size)
         self._shards = [_Shard(self.devices[i], lo, hi) for i, (lo, hi) in enumerate(_split(length, parts))]
 
+    def _own(self, tensor):
+        """A copy that owns exactly its own elements, when that saves anything.
+
+        A slab taken off the first device's copy is often already contiguous —
+        `narrow` from 0, and any single-channel slice, both are — so `.contiguous()`
+        hands back a view and the slab keeps the whole volume alive. With one shard
+        the slabs are that volume, so copying would only duplicate it.
+        """
+        tensor = tensor.contiguous()
+        if len(self._shards) > 1 and tensor.untyped_storage().size() != tensor.numel() * tensor.element_size():
+            tensor = tensor.clone()
+        return tensor
+
     def _move(self, tensor, device):
         """`tensor.to(device)`, inside autograd; between GPUs through the host unless `peer_copies`."""
         device = torch.device(device)
@@ -313,7 +326,7 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
         self._build_shards(level_size, halo)
         for shard in self._shards:
             for name, field in full.items():
-                part = self._move(field.narrow(self._vdim, shard.lo, shard.hi - shard.lo), shard.device).contiguous()
+                part = self._own(self._move(field.narrow(self._vdim, shard.lo, shard.hi - shard.lo), shard.device))
                 setattr(shard, name, nn.Parameter(part) if name == "warp" else part)
         if self.reset_step:
             self.step_t = 0
@@ -397,12 +410,12 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
         for shard in self._shards:
             lo, hi = self._halo_range(shard, halo)
             slab = fixed_level.narrow(self._idim, lo, hi - lo)
-            shard.fixed = [self._move(slab[:, c0:c1], shard.device).contiguous()
+            shard.fixed = [self._own(self._move(slab[:, c0:c1], shard.device))
                            for c0, c1 in self._channel_chunks(image_channels)]
             shard.fixed_mask = None
             if self.masked:
-                shard.fixed_mask = self._move(fixed_level[:, -1:].narrow(
-                    self._idim, shard.lo, shard.hi - shard.lo), shard.device).contiguous()
+                shard.fixed_mask = self._own(self._move(fixed_level[:, -1:].narrow(
+                    self._idim, shard.lo, shard.hi - shard.lo), shard.device))
 
     def _cut_moving(self, shard, moving_level, affine, margin):
         """Keep on the shard's device the box of the moving image its slab can sample."""
@@ -426,9 +439,9 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
         in_box = _box_matrix(los, his, msize)
         crop = moving_level[:, :, los[0]:his[0], los[1]:his[1], los[2]:his[2]]
         image_channels = crop.shape[1] - (1 if self.masked else 0)
-        shard.moving = [self._move(crop[:, c0:c1], shard.device).contiguous()
+        shard.moving = [self._own(self._move(crop[:, c0:c1], shard.device))
                         for c0, c1 in self._channel_chunks(image_channels)]
-        shard.moving_mask = self._move(crop[:, -1:], shard.device).contiguous() if self.masked else None
+        shard.moving_mask = self._own(self._move(crop[:, -1:], shard.device)) if self.masked else None
         shard.moving_margin = margin
         shard.moving_is_full = all(lo == 0 and hi == n for lo, hi, n in zip(los, his, msize))
         shard.sample_affine = (torch.linalg.inv(in_box) @ affine.double() @ out_box)[:, :3].to(
@@ -466,6 +479,12 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
         batch = self.opt_size
         ratio = self.masked and self.reduction == "mean"
         space = tuple(range(1, self.dims + 2))
+        mode = getattr(self.loss_fn, "mask_mode", DEFAULT_MASK_MODE)
+
+        def mask_of(shard):
+            """The slab's fixed and moved-moving masks, combined as the loss asks."""
+            return get_mask_function(self._sample(shard, shard.moving_mask),
+                                     shard.fixed_mask, mode)
 
         denominator = None
         if ratio:
@@ -473,7 +492,7 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
             parts = []
             for shard in self._shards:
                 with torch.cuda.device(shard.device):
-                    parts.append((shard.fixed_mask * self._sample(shard, shard.moving_mask)).sum(dim=space))
+                    parts.append(mask_of(shard).sum(dim=space))
             denominator = sum(self._move(p, device) for p in parts)
             denominator.sum().backward()
             for shard in self._shards:
@@ -499,7 +518,7 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
                     values = self._losses[shard.device].forward_util(padded[i], shard.fixed[k])
                     values = self._crop(values, i, self._idim, cc_halo)
                     if self.masked:
-                        values = values * (shard.fixed_mask * self._sample(shard, shard.moving_mask))
+                        values = values * mask_of(shard)
                     parts.append(values.sum(dim=space))
             del padded, values
             chunk_sum = sum(self._move(p, device) for p in parts)

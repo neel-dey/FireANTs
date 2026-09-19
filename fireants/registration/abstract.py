@@ -20,6 +20,7 @@ import torch
 from torch import nn
 from fireants.utils.util import _assert_check_scales_decreasing
 from fireants.losses import GlobalMutualInformationLoss, LocalNormalizedCrossCorrelationLoss, NoOp, MeanSquaredError
+from fireants.losses.maskedutils import DEFAULT_MASK_MODE, get_mask_function
 from torch.optim import SGD, Adam
 from fireants.io.image import BatchedImages, FakeBatchedImages
 from typing import Optional, Union
@@ -303,22 +304,29 @@ class AbstractRegistration(ABC):
         channels = fixed.shape[1] - (1 if self.masked else 0)
         chunks = [(c, min(c + chunk, channels)) for c in range(0, channels, chunk)]
         space = tuple(range(1, fixed.dim()))
+        # `opt_size`, not `fixed.shape[0]`: a fixed batch of 1 broadcasts against N moving images
+        batch = self.opt_size
+        mode = getattr(loss_fn, 'mask_mode', DEFAULT_MASK_MODE)
         # the masks are one channel each: they stay on the compute device for the whole step
         fixed_mask = stage(fixed[:, -1:]) if self.masked else None
         moving_mask = stage(moving[:, -1:]) if self.masked else None
+
+        def combined_mask():
+            """The fixed and moved-moving masks, combined as the loss asks."""
+            return get_mask_function(sample(moving_mask), fixed_mask, mode)
 
         def numerator(c0, c1):
             """Per-image sum of the per-voxel loss of channels [c0, c1), inside the mask if any."""
             values = loss_fn.forward_util(sample(stage(moving[:, c0:c1])),
                                           stage(fixed[:, c0:c1]).contiguous())
             if self.masked:
-                values = values * (fixed_mask * sample(moving_mask))
+                values = values * combined_mask()
             return values.sum(dim=space)
 
         previous, loss_fn.reduction = loss_fn.reduction, 'none'
         try:
             if reduction == 'sum' or not self.masked:
-                weight = 1.0 if reduction == 'sum' else 1.0 / (fixed.shape[0] * channels * fixed[0, 0].numel())
+                weight = 1.0 if reduction == 'sum' else 1.0 / (batch * channels * fixed[0, 0].numel())
                 total = 0.0
                 for c0, c1 in chunks:
                     part = numerator(c0, c1).sum() * weight
@@ -329,10 +337,9 @@ class AbstractRegistration(ABC):
             # masked mean: loss = mean_b N_b / (D_b + eps). Measure N and D first, then
             # backpropagate dN / (D + eps) - N dD / (D + eps)^2 piece by piece.
             with torch.no_grad():
-                denominator = (fixed_mask * sample(moving_mask)).sum(dim=space) + 1e-8
+                denominator = combined_mask().sum(dim=space) + 1e-8
                 total = sum(numerator(c0, c1) for c0, c1 in chunks)
-            batch = fixed.shape[0]
-            mask_sum = (fixed_mask * sample(moving_mask)).sum(dim=space)
+            mask_sum = combined_mask().sum(dim=space)
             (-(mask_sum * total / (denominator * denominator)).sum() / batch).backward()
             for c0, c1 in chunks:
                 ((numerator(c0, c1) / denominator).sum() / batch).backward()
