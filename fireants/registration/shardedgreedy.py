@@ -365,8 +365,8 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
         img, mask = self._split_image_and_mask_last_channel(arrays)
         out = torch.empty([*arrays.shape[:2], *size], dtype=arrays.dtype, device=arrays.device)
         clamp_range = (img.min().item(), img.max().item()) if self.blur else None
-        # the FFT downsampler holds a few complex copies of its input
-        chunk = max(1, int(2 ** 28 // max(int(np.prod(arrays.shape[2:])) * arrays.shape[0], 1)))
+        # the FFT downsampler holds several complex copies of its input: keep the input near 128 MiB
+        chunk = max(1, int(2 ** 25 // max(int(np.prod(arrays.shape[2:])) * arrays.shape[0], 1)))
         with torch.cuda.device(device):
             for c0 in range(0, img.shape[1], chunk):
                 part = self._move(img[:, c0:c0 + chunk], device)
