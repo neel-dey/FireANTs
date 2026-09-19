@@ -357,14 +357,20 @@ class AffineRegistration(AbstractRegistration):
             for i in pbar:
                 self.optimizer.zero_grad()
                 affinemat = ((moving_p2t @ self.get_affine_matrix() @ fixed_t2p)[:, :-1]).contiguous().to(self.dtype)
-                # sample from these coords
-                moved_image = fireants_interpolator(moving_image_blur, affine=affinemat, 
-                                out_shape=fixed_image_down.shape, mode='bilinear', align_corners=True)  # [N, C, H, W, [D]]
-                # calculate loss function
-                loss = self.loss_fn(moved_image, fixed_image_down)
-                loss.backward()
+                if self.channel_chunk is None:
+                    # sample from these coords
+                    moved_image = fireants_interpolator(moving_image_blur, affine=affinemat, 
+                                    out_shape=fixed_image_down.shape, mode='bilinear', align_corners=True)  # [N, C, H, W, [D]]
+                    # calculate loss function
+                    loss = self.loss_fn(moved_image, fixed_image_down)
+                    loss.backward()
+                    cur_loss = loss.item()
+                else:
+                    def resample(image, matrix):
+                        shape = [image.shape[0], image.shape[1], *fixed_image_down.shape[2:]]
+                        return fireants_interpolator(image, affine=matrix, out_shape=shape, mode='bilinear', align_corners=True)
+                    cur_loss = self._loss_backward_in_chunks(resample, affinemat, moving_image_blur, fixed_image_down)
                 # Save parameters before the optimizer changes them.
-                cur_loss = loss.item()
                 if best is not None:
                     best.measured(cur_loss)
                 self.optimizer.step()

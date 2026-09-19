@@ -14,7 +14,7 @@
 
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Callable
 import torch
 from torch import nn
 from fireants.utils.util import _assert_check_scales_decreasing
@@ -80,6 +80,10 @@ class AbstractRegistration(ABC):
             pyramid runs more than one pass at the same resolution (e.g. [4,4,2,1]). The
             check on `scales` relaxes from strictly decreasing to non-increasing.
             Default: False.
+        channel_chunk (int, optional): In rigid and affine registration, evaluate the loss this many
+            image channels at a time and accumulate the gradient: same loss and gradient, less memory.
+            Needs a local loss (cc, fusedcc, mse or their masked variants). Deformable registration
+            has this option in `ShardedGreedyRegistration`. Default: None (all channels at once).
         keep_best (bool, optional): In rigid, affine, and greedy registration, restore
             the parameters with the lowest finite loss measured at each level and reset
             their optimizer state. The final optimizer step is not evaluated and is
@@ -110,6 +114,7 @@ class AbstractRegistration(ABC):
                 dtype: torch.dtype = torch.float32,
                 allow_repeated_scales: bool = False,
                 keep_best: bool = False,
+                channel_chunk: Optional[int] = None,
                 ) -> None:
         '''
         Initialize abstract registration class
@@ -195,6 +200,11 @@ class AbstractRegistration(ABC):
             raise ValueError(f"Loss type {loss_type} not supported")
 
         # see if loss can store the iterations
+        self.channel_chunk = channel_chunk
+        if channel_chunk is not None and (not hasattr(self.loss_fn, 'forward_util')
+                                          or 'MutualInformation' in type(self.loss_fn).__name__):
+            raise NotImplementedError(f"channel_chunk needs a local loss, not {type(self.loss_fn).__name__}")
+
         if hasattr(self.loss_fn, 'set_iterations'):
             logger.info("Setting iterations for loss function")
             self.loss_fn.set_iterations(self.iterations)
@@ -206,6 +216,59 @@ class AbstractRegistration(ABC):
 
     def print_init_msg(self):
         logger.info(f"Registration of type {self.__class__.__name__} initialized with dtype {self.dtype}")
+
+    def _loss_backward_in_chunks(self, resample: Callable, affine: torch.Tensor,
+                                 moving: torch.Tensor, fixed: torch.Tensor) -> float:
+        """Backpropagate `loss_fn(resample(moving, affine), fixed)` `channel_chunk` image channels at a time.
+
+        `resample(image, affine)` puts a subset of the moving channels on the fixed grid.
+        The chunks' gradients are summed on a detached copy of `affine` and sent through
+        its graph once. Returns the loss value.
+        """
+        matrix = affine.detach().requires_grad_(True)
+
+        def sample(image):
+            return resample(image.contiguous(), matrix)
+
+        loss_fn = self.loss_fn
+        reduction = loss_fn.masked_reduction if self.masked else loss_fn.reduction
+        channels = fixed.shape[1] - (1 if self.masked else 0)
+        chunks = [(c, min(c + self.channel_chunk, channels)) for c in range(0, channels, self.channel_chunk)]
+        space = tuple(range(1, fixed.dim()))
+        fixed_mask = fixed[:, -1:] if self.masked else None
+
+        def numerator(c0, c1):
+            """Per-image sum of the per-voxel loss of channels [c0, c1), inside the mask if any."""
+            values = loss_fn.forward_util(sample(moving[:, c0:c1]), fixed[:, c0:c1].contiguous())
+            if self.masked:
+                values = values * (fixed_mask * sample(moving[:, -1:]))
+            return values.sum(dim=space)
+
+        previous, loss_fn.reduction = loss_fn.reduction, 'none'
+        try:
+            if reduction == 'sum' or not self.masked:
+                weight = 1.0 if reduction == 'sum' else 1.0 / (fixed.shape[0] * channels * fixed[0, 0].numel())
+                total = 0.0
+                for c0, c1 in chunks:
+                    part = numerator(c0, c1).sum() * weight
+                    part.backward()
+                    total += part.item()
+                affine.backward(matrix.grad)
+                return total
+            # masked mean: loss = mean_b N_b / (D_b + eps). Measure N and D first, then
+            # backpropagate dN / (D + eps) - N dD / (D + eps)^2 piece by piece.
+            with torch.no_grad():
+                denominator = (fixed_mask * sample(moving[:, -1:])).sum(dim=space) + 1e-8
+                total = sum(numerator(c0, c1) for c0, c1 in chunks)
+            batch = fixed.shape[0]
+            mask_sum = (fixed_mask * sample(moving[:, -1:])).sum(dim=space)
+            (-(mask_sum * total / (denominator * denominator)).sum() / batch).backward()
+            for c0, c1 in chunks:
+                ((numerator(c0, c1) / denominator).sum() / batch).backward()
+            affine.backward(matrix.grad)
+            return (total / denominator).mean().item()
+        finally:
+            loss_fn.reduction = previous
 
     def best_iterate(self, parameters) -> Optional[BestIterate]:
         """Create a parameter tracker for one level when `keep_best` is enabled."""

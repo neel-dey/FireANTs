@@ -381,13 +381,20 @@ class RigidRegistration(AbstractRegistration):
                 self.optimizer.zero_grad()
                 rigid_matrix = self.get_rigid_matrix()
                 mat = ((moving_p2t @ rigid_matrix @ fixed_t2p)[:, :-1]).contiguous()
-                # sample from these coords
-                moved_image = fireants_interpolator(moving_image_blur, affine=mat.to(moving_image_blur.dtype), 
-                                out_shape=fixed_image_down.shape, mode='bilinear', align_corners=True)  # [N, C, H, W, [D]]
-                loss = self.loss_fn(moved_image, fixed_image_down) 
-                loss.backward()
+                if self.channel_chunk is None:
+                    # sample from these coords
+                    moved_image = fireants_interpolator(moving_image_blur, affine=mat.to(moving_image_blur.dtype), 
+                                    out_shape=fixed_image_down.shape, mode='bilinear', align_corners=True)  # [N, C, H, W, [D]]
+                    loss = self.loss_fn(moved_image, fixed_image_down) 
+                    loss.backward()
+                    cur_loss = loss.item()
+                else:
+                    def resample(image, matrix):
+                        shape = [image.shape[0], image.shape[1], *fixed_image_down.shape[2:]]
+                        return fireants_interpolator(image, affine=matrix, out_shape=shape, mode='bilinear', align_corners=True)
+                    cur_loss = self._loss_backward_in_chunks(
+                        resample, mat.to(moving_image_blur.dtype), moving_image_blur, fixed_image_down)
                 # Save parameters before the optimizer changes them.
-                cur_loss = loss.item()
                 if best is not None:
                     best.measured(cur_loss)
                 self.optimizer.step()
