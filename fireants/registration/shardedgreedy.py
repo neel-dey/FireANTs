@@ -132,6 +132,8 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
     Takes the arguments of `GreedyRegistration`, plus:
 
     Args:
+        cc_kernel_size: CC window width per spatial axis. Defaults to 7 (7x7x7),
+            matching `GreedyRegistration`.
         devices: CUDA devices to split the fixed grid over. One device is allowed.
         dim_to_shard: spatial axis (0, 1, 2) to cut; the longest fixed axis by default.
         channel_chunk: number of image channels per loss evaluation. None evaluates
@@ -156,7 +158,7 @@ class ShardedGreedyRegistration(AbstractRegistration, DeformableMixin):
                  optimizer: str = "Adam", optimizer_params: dict = {},
                  optimizer_lr: float = 0.5,
                  mi_kernel_type: str = "gaussian", cc_kernel_type: str = "rectangular",
-                 cc_kernel_size: int = 3,
+                 cc_kernel_size: int = 7,
                  smooth_warp_sigma: float = 0.5,
                  smooth_grad_sigma: float = 1.0,
                  loss_params: dict = {},

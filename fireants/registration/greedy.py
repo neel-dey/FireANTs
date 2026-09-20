@@ -59,7 +59,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
             Only used if deformation_type='geodesic'. Defaults to 7.
         mi_kernel_type (str, optional): Kernel type for MI loss. Defaults to 'gaussian'.
         cc_kernel_type (str, optional): Kernel type for CC loss. Defaults to 'rectangular'.
-        cc_kernel_size (int, optional): Kernel size for CC loss. Defaults to 3.
+        cc_kernel_size (int, optional): Kernel width per spatial axis for CC loss. Defaults to 7.
         smooth_warp_sigma (float, optional): Gaussian smoothing sigma for warp field. Defaults to 0.5.
         smooth_grad_sigma (float, optional): Gaussian smoothing sigma for gradient field. Defaults to 1.0.
         loss_params (dict, optional): Additional parameters for loss function. Defaults to {}.
