@@ -1,3 +1,0 @@
-[submodule "cookbook"]
-	path = cookbook
-	url = git@github.com:rohitrango/fireants_cookbook.git
